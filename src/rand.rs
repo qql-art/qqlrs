@@ -111,6 +111,24 @@ impl Rng {
         }
         &weighted_items.last().expect("no items").0
     }
+
+    /// Constructs a new vector with a uniformly random permutation of the elements in `xs`.
+    ///
+    /// # Caveats
+    ///
+    /// If the next `n` [uniform deviates][Rng::rnd] from the current state would contain any
+    /// duplicates (where `n` is the number of elements in `xs`), the sort order is
+    /// implementation-defined. The chance of this happening (if the internal state is chosen
+    /// uniformly at random) is `n * (n - 1) / (2 * 2^32)`.
+    pub fn shuffle<T, I: IntoIterator<Item = T>>(&mut self, xs: I) -> Vec<T> {
+        let mut result: Vec<(f64, T)> = xs.into_iter().map(|x| (self.rnd(), x)).collect();
+        // Using an unstable sort here under the assumption that no keys collide. If any keys do
+        // collide, then the callback defined in the JavaScript implementation is not a *consistent
+        // comparator* (per ECMAScript spec section 23.1.3.30.1) and so the sort order is
+        // implementation-defined, anyway.
+        result.sort_unstable_by(|(k1, _), (k2, _)| k1.total_cmp(k2));
+        result.into_iter().map(|(_, x)| x).collect()
+    }
 }
 
 #[cfg(test)]
@@ -229,6 +247,39 @@ mod test {
         assert_eq!(
             counts,
             HashMap::from([("red", 1692), ("green", 4983), ("blue", 3325)])
+        );
+    }
+
+    #[test]
+    fn test_shuffle_empty() {
+        let mut rng = Rng::from_seed(b"");
+        assert_eq!(rng.shuffle(Vec::<()>::new()), Vec::<()>::new());
+    }
+
+    #[test]
+    fn test_shuffle_singleton() {
+        let mut rng = Rng::from_seed(b"");
+        assert_eq!(rng.shuffle(vec![777]), vec![777]);
+        assert_eq!(rng.shuffle(vec![777]), vec![777]);
+        assert_eq!(rng.shuffle(vec![777]), vec![777]);
+    }
+
+    #[test]
+    fn test_shuffle_sequence() {
+        let mut rng = Rng::from_seed(b"");
+
+        let colors = vec!['r', 'o', 'y', 'g', 'b', 'i', 'v'];
+        assert_eq!(
+            rng.shuffle(colors.clone()),
+            vec!['v', 'y', 'o', 'i', 'r', 'b', 'g']
+        );
+        assert_eq!(
+            rng.shuffle(colors.clone()),
+            vec!['r', 'i', 'y', 'v', 'o', 'b', 'g']
+        );
+        assert_eq!(
+            rng.shuffle(colors.clone()),
+            vec!['i', 'v', 'y', 'r', 'o', 'b', 'g']
         );
     }
 }

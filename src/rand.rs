@@ -2,7 +2,6 @@ use std::num::Wrapping;
 
 pub struct Rng {
     state: [u16; 4],
-    #[allow(dead_code)]
     next_gaussian: Option<f64>,
 }
 
@@ -62,6 +61,26 @@ impl Rng {
     /// Picks a random value uniformly distributed between `min` (inclusive) and `max` (exclusive).
     pub fn uniform(&mut self, min: f64, max: f64) -> f64 {
         self.rnd() * (max - min) + min
+    }
+
+    /// Picks a random value according to a Gaussian (normal) distribution with the given mean and
+    /// standard deviation.
+    pub fn gauss(&mut self, mean: f64, stdev: f64) -> f64 {
+        if let Some(z) = self.next_gaussian.take() {
+            return mean + stdev * z;
+        }
+        let (v1, v2, s) = loop {
+            let v1 = self.rnd() * 2.0 - 1.0;
+            let v2 = self.rnd() * 2.0 - 1.0;
+            let s = v1 * v1 + v2 * v2;
+            if s < 1.0 && s != 0.0 {
+                break (v1, v2, s);
+            }
+        };
+        let multiplier = (-2.0 * f64::ln(s) / s).sqrt();
+        let (z1, z2) = (v1 * multiplier, v2 * multiplier);
+        self.next_gaussian = Some(z2);
+        mean + stdev * z1
     }
 
     /// Picks `true` with probability roughly `p`, or `false` otherwise.
@@ -219,6 +238,66 @@ mod test {
                 10.772844967897981
             ]
         );
+    }
+
+    #[test]
+    fn test_gauss_sequence() {
+        let mut rng = Rng::from_seed(b"");
+        // Grab more samples than usual to get better coverage on the rejection sampling.
+        let vs: [f64; 32] = std::array::from_fn(|_| rng.gauss(10.0, 2.0));
+        assert_eq!(
+            vs,
+            [
+                12.347622663830158,
+                9.555644025458262,
+                11.766414589742986,
+                10.421065902979189,
+                8.663257202843637,
+                9.614660370965233,
+                12.005698572460942,
+                9.628512069963776,
+                8.916242878757988,
+                12.876768026032124,
+                10.617258413596735,
+                14.006192320114256,
+                9.947034706000881,
+                10.230187477724286,
+                7.451754035760429,
+                11.148342846306345,
+                9.390119721601897,
+                9.944130446086874,
+                7.709356813603907,
+                10.325955650684277,
+                8.378478731186833,
+                7.097538510395173,
+                10.939522022890161,
+                11.26899183993857,
+                9.026276357070047,
+                7.307428436569156,
+                10.764942658443658,
+                9.065278355076405,
+                6.629640618523688,
+                12.26010079693567,
+                6.424702181087971,
+                10.32136095339319
+            ]
+        );
+    }
+
+    #[test]
+    fn test_gauss_commutes_when_cached() {
+        let mut rng = Rng::from_seed(b"");
+        rng.gauss(0.0, 0.0);
+        let y1 = rng.gauss(0.0, 0.0);
+
+        let mut rng = Rng::from_seed(b"");
+        rng.gauss(0.0, 0.0);
+        rng.rnd();
+        rng.rnd();
+        rng.rnd();
+        let y2 = rng.gauss(0.0, 0.0);
+
+        assert_eq!(y1, y2);
     }
 
     #[test]

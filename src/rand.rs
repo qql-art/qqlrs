@@ -129,6 +129,23 @@ impl Rng {
         result.sort_unstable_by(|(k1, _), (k2, _)| k1.total_cmp(k2));
         result.into_iter().map(|(_, x)| x).collect()
     }
+
+    /// Mutates `xs` in place to "winnow it down" to contain at most `num` elements, preserving the
+    /// original order.
+    ///
+    /// # Performance
+    ///
+    /// The current implementation takes time linear in the product of `xs.len()` and the number of
+    /// elements removed.
+    pub fn winnow<T>(&mut self, xs: &mut Vec<T>, num: usize) {
+        // Inefficient quadratic implementation, but this function is only called twice per QQL on
+        // a fairly small sequence, so we just go with it to be entropy-consistent with the
+        // JavaScript implementation.
+        while xs.len() > num {
+            let index = (self.rnd() * (xs.len() as f64)) as usize;
+            xs.remove(index);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -281,6 +298,27 @@ mod test {
             rng.shuffle(colors.clone()),
             vec!['i', 'v', 'y', 'r', 'o', 'b', 'g']
         );
+    }
+
+    #[test]
+    fn test_winnow_sequence() {
+        let mut rng = Rng::from_seed(b"");
+
+        let mut colors = vec!['r', 'o', 'y', 'g', 'b', 'i', 'v'];
+        rng.winnow(&mut colors, 999);
+        assert_eq!(colors, vec!['r', 'o', 'y', 'g', 'b', 'i', 'v']);
+        rng.winnow(&mut colors, 4);
+        assert_eq!(colors, vec!['r', 'g', 'b', 'v']);
+        rng.winnow(&mut colors, 4);
+        assert_eq!(colors, vec!['r', 'g', 'b', 'v']);
+        rng.winnow(&mut colors, 1);
+        assert_eq!(colors, vec!['r']);
+
+        colors = vec!['r', 'o', 'y', 'g', 'b', 'i', 'v'];
+        rng.winnow(&mut colors, 4);
+        assert_eq!(colors, vec!['o', 'y', 'b', 'i']);
+        rng.winnow(&mut colors, 1);
+        assert_eq!(colors, vec!['o']);
     }
 }
 

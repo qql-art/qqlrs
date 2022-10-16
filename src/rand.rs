@@ -58,6 +58,39 @@ impl Rng {
         let fac: u32 = (xorshifted >> (s3.0 >> 11)) | (xorshifted << (-(s3.0 >> 11) & 31));
         2.0f64.powi(-32) * f64::from(fac)
     }
+
+    /// Picks a random value uniformly distributed between `min` (inclusive) and `max` (exclusive).
+    pub fn uniform(&mut self, min: f64, max: f64) -> f64 {
+        self.rnd() * (max - min) + min
+    }
+
+    /// Picks `true` with probability roughly `p`, or `false` otherwise.
+    ///
+    /// # Approximate correctness
+    ///
+    /// The probability that `true` is returned is actually roughly `p + 2^-32`. In particular,
+    /// `true` may be returned even if `p` is exactly zero.
+    ///
+    /// ```
+    /// use qql::rand::Rng;
+    /// let mut rng = Rng::from_seed(b"\x2e\x7e\x19\x00");
+    /// let odds: [bool; 76] = std::array::from_fn(|_| rng.odds(0.0));
+    /// assert_eq!(&odds[71..], &[false, false, false, false, true]);
+    /// ```
+    pub fn odds(&mut self, p: f64) -> bool {
+        self.rnd() <= p
+    }
+
+    /// Chooses an item from `items` at a uniformly random index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `items.is_empty()`.
+    pub fn choice<'a, T>(&mut self, items: &'a [T]) -> &'a T {
+        &items
+            .get(self.uniform(0.0, items.len() as f64) as usize)
+            .expect("no items")
+    }
 }
 
 #[cfg(test)]
@@ -112,6 +145,55 @@ mod test {
                 0.9752047171350569
             ]
         );
+    }
+
+    #[test]
+    fn test_uniform_sequence() {
+        let mut rng = Rng::from_seed(b"");
+        let vs: [f64; 8] = std::array::from_fn(|i| rng.uniform(i as f64, i as f64 * 2.0 + 3.0));
+        assert_eq!(
+            vs,
+            [
+                2.5315538013819605,
+                2.7396645257249475,
+                3.3391379197128117,
+                8.876758354716003,
+                10.270520234014839,
+                9.754763178527355,
+                6.668700351845473,
+                10.772844967897981
+            ]
+        );
+    }
+
+    #[test]
+    fn test_odds_sequence() {
+        let mut rng = Rng::from_seed(b"");
+        let vs: [bool; 16] = std::array::from_fn(|i| rng.odds(i as f64 / 16.0));
+        assert_eq!(
+            vs,
+            [
+                false, false, false, false, false, false, true, true, // 0..8
+                false, true, false, false, true, true, true, true
+            ]
+        );
+    }
+
+    #[test]
+    fn test_choice_sequence() {
+        let mut rng = Rng::from_seed(b"");
+
+        let colors = &["red", "green", "blue"];
+        let fingers = &[1, 2, 3, 4, 5];
+
+        let colors_vs: [&str; 8] = std::array::from_fn(|_| *rng.choice(colors));
+        let fingers_vs: [u32; 8] = std::array::from_fn(|_| *rng.choice(fingers));
+
+        assert_eq!(
+            colors_vs,
+            ["blue", "green", "red", "blue", "blue", "green", "red", "green"]
+        );
+        assert_eq!(fingers_vs, [5, 3, 5, 5, 3, 4, 3, 4]);
     }
 }
 

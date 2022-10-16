@@ -1,7 +1,7 @@
 use std::num::Wrapping;
 
 pub struct Rng {
-    state: [u16; 4],
+    state: [u32; 4],
     next_gaussian: Option<f64>,
 }
 
@@ -18,10 +18,10 @@ impl Rng {
         // This Rust port chooses to use the little-endian behavior everywhere for portability. The
         // original behavior can be recovered by changing `from_le_bytes` to `from_ne_bytes`.
         let state = [
-            u16::from_le_bytes([lower[0], lower[1]]),
-            u16::from_le_bytes([lower[2], lower[3]]),
-            u16::from_le_bytes([upper[0], upper[1]]),
-            u16::from_le_bytes([upper[2], upper[3]]),
+            u32::from(u16::from_le_bytes([lower[0], lower[1]])),
+            u32::from(u16::from_le_bytes([lower[2], lower[3]])),
+            u32::from(u16::from_le_bytes([upper[0], upper[1]])),
+            u32::from(u16::from_le_bytes([upper[2], upper[3]])),
         ];
         Rng {
             state,
@@ -41,14 +41,14 @@ impl Rng {
         const A3: Wrapping<u32> = Wrapping(0x1405);
 
         // Advance internal state.
-        let [s0, s1, s2, s3] = self.state.map(|x| Wrapping(u32::from(x)));
+        let [s0, s1, s2, s3] = self.state.map(|x| Wrapping(x));
 
         let new0 = A0 + M0 * s0;
         let new1 = A1 + M0 * s1 + (M1 * s0 + (new0 >> 16));
         let new2 = A2 + M0 * s2 + M1 * s1 + (M2 * s0 + (new1 >> 16));
         let new3 = A3 + M0 * s3 + (M1 * s2 + M2 * s1) + (M3 * s0 + (new2 >> 16));
 
-        self.state = [new0, new1, new2, new3].map(|x| x.0 as u16);
+        self.state = [new0, new1, new2, new3].map(|x| x.0 & 0xffff);
 
         // Calculate output function (XSH RR) using the old state.
         let xorshifted: u32 = ((s3 << 21) + (((s3 >> 2) ^ s2) << 5) + (((s2 >> 2) ^ s1) >> 11)).0;

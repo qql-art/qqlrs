@@ -91,6 +91,26 @@ impl Rng {
             .get(self.uniform(0.0, items.len() as f64) as usize)
             .expect("no items")
     }
+
+    /// Given a slice of `(item, weight)` pairs, chooses an `item` with probability proportional to
+    /// its `weight`. (The name `wc` is short for *weighted choice*.)
+    ///
+    /// # Panics
+    ///
+    /// Panics if `weighted_items.is_empty()`.
+    pub fn wc<'a, T>(&mut self, weighted_items: &'a [(T, u32)]) -> &'a T {
+        let sum_weight: u32 = weighted_items.iter().map(|(_, w)| w).sum();
+        let bisection = f64::ceil(sum_weight as f64 * self.rnd()) as u32;
+
+        let mut cum_weight: u32 = 0;
+        for (value, weight) in weighted_items {
+            cum_weight += weight;
+            if cum_weight >= bisection {
+                return value;
+            }
+        }
+        &weighted_items.last().expect("no items").0
+    }
 }
 
 #[cfg(test)]
@@ -194,6 +214,22 @@ mod test {
             ["blue", "green", "red", "blue", "blue", "green", "red", "green"]
         );
         assert_eq!(fingers_vs, [5, 3, 5, 5, 3, 4, 3, 4]);
+    }
+
+    #[test]
+    fn test_wc_distribution() {
+        use std::collections::HashMap;
+        let mut rng = Rng::from_seed(b"");
+        let weighted_items = &[("red", 1), ("green", 3), ("blue", 2)];
+        let mut counts = HashMap::new();
+        for _ in 0..10000 {
+            let color = *rng.wc(weighted_items);
+            *counts.entry(color).or_default() += 1;
+        }
+        assert_eq!(
+            counts,
+            HashMap::from([("red", 1692), ("green", 4983), ("blue", 3325)])
+        );
     }
 }
 

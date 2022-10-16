@@ -1,7 +1,6 @@
 use std::num::Wrapping;
 
 pub struct Rng {
-    #[allow(dead_code)]
     state: [u16; 4],
     #[allow(dead_code)]
     next_gaussian: Option<f64>,
@@ -30,6 +29,35 @@ impl Rng {
             next_gaussian: None,
         }
     }
+
+    /// Picks a random value uniformly distributed between `0.0` (inclusive) and `1.0` (exclusive).
+    pub fn rnd(&mut self) -> f64 {
+        const M0: Wrapping<u32> = Wrapping(0x7f2d);
+        const M1: Wrapping<u32> = Wrapping(0x4c95);
+        const M2: Wrapping<u32> = Wrapping(0xf42d);
+        const M3: Wrapping<u32> = Wrapping(0x5851);
+        const A0: Wrapping<u32> = Wrapping(0x814f);
+        const A1: Wrapping<u32> = Wrapping(0xf767);
+        const A2: Wrapping<u32> = Wrapping(0x7b7e);
+        const A3: Wrapping<u32> = Wrapping(0x1405);
+
+        // Advance internal state.
+        let [s0, s1, s2, s3] = self.state.map(|x| Wrapping(u32::from(x)));
+
+        let new0 = A0 + M0 * s0;
+        let new1 = A1 + M0 * s1 + (M1 * s0 + (new0 >> 16));
+        let new2 = A2 + M0 * s2 + M1 * s1 + (M2 * s0 + (new1 >> 16));
+        let new3 = A3 + M0 * s3 + (M1 * s2 + M2 * s1) + (M3 * s0 + (new2 >> 16));
+
+        self.state = [new0, new1, new2, new3].map(|x| x.0 as u16);
+
+        // Calculate output function (XSH RR) using the old state.
+        let [_s0, s1, s2, s3] = [s0, s1, s2, s3].map(|x| Wrapping(x.0 as i32));
+        let xorshifted: u32 =
+            ((s3 << 21) + (((s3 >> 2) ^ s2) << 5) + (((s2 >> 2) ^ s1) >> 11)).0 as u32;
+        let fac: u32 = (xorshifted >> (s3.0 >> 11)) | (xorshifted << (-(s3.0 >> 11) & 31));
+        2.0f64.powi(-32) * f64::from(fac)
+    }
 }
 
 #[cfg(test)]
@@ -46,6 +74,43 @@ mod test {
             ))
             .state,
             [0xa894, 0x2177, 0x9757, 0x5069]
+        );
+    }
+
+    #[test]
+    fn test_rnd_sequence() {
+        let mut rng = Rng::from_seed(b"");
+        let us: [f64; 8] = std::array::from_fn(|_| rng.rnd());
+        assert_eq!(
+            us,
+            [
+                0.8438512671273202,
+                0.43491613143123686,
+                0.26782758394256234,
+                0.9794597257860005,
+                0.8957886048592627,
+                0.5943453973159194,
+                0.07430003909394145,
+                0.37728449678979814
+            ]
+        );
+
+        let mut rng = Rng::from_seed(&hex!(
+            "efa7bdd92b5e9cd9de9b54ac0e3dc60623f1c989a80ed9c5157fffff10c2a148"
+        ));
+        let us: [f64; 8] = std::array::from_fn(|_| rng.rnd());
+        assert_eq!(
+            us,
+            [
+                0.40630031237378716,
+                0.590646798722446,
+                0.5958091835491359,
+                0.09100268967449665,
+                0.9242822963278741,
+                0.808205850655213,
+                0.7671284528914839,
+                0.9752047171350569
+            ]
         );
     }
 }

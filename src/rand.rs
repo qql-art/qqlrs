@@ -1,6 +1,55 @@
 use std::num::Wrapping;
 
-#[allow(dead_code)]
+pub struct Rng {
+    #[allow(dead_code)]
+    state: [u16; 4],
+    #[allow(dead_code)]
+    next_gaussian: Option<f64>,
+}
+
+impl Rng {
+    pub fn from_seed(seed: &[u8]) -> Rng {
+        let lower = murmur2(seed, 1690382925).to_be_bytes();
+        let upper = murmur2(seed, 72970470).to_be_bytes();
+
+        // NOTE(wchargin): There are endianness dragons here. The original JavaScript code uses
+        // `DataView.setUint32` to portably write a big-endian integer into an `ArrayBuffer`.
+        // However, this buffer is the backing storage of a `Uint16Array`, which later reads from
+        // the data in platform-dependent order.
+        //
+        // This Rust port chooses to use the little-endian behavior everywhere for portability. The
+        // original behavior can be recovered by changing `from_le_bytes` to `from_ne_bytes`.
+        let state = [
+            u16::from_le_bytes([lower[0], lower[1]]),
+            u16::from_le_bytes([lower[2], lower[3]]),
+            u16::from_le_bytes([upper[0], upper[1]]),
+            u16::from_le_bytes([upper[2], upper[3]]),
+        ];
+        Rng {
+            state,
+            next_gaussian: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use hex_literal::hex;
+
+    #[test]
+    fn test_seed_state() {
+        assert_eq!(Rng::from_seed(b"").state, [0xeb00, 0x43ae, 0x85e9, 0x381a]);
+        assert_eq!(
+            Rng::from_seed(&hex!(
+                "efa7bdd92b5e9cd9de9b54ac0e3dc60623f1c989a80ed9c5157fffff10c2a148"
+            ))
+            .state,
+            [0xa894, 0x2177, 0x9757, 0x5069]
+        );
+    }
+}
+
 fn murmur2(bytes: &[u8], seed: u32) -> u32 {
     const K: usize = 16;
     const MASK: Wrapping<u32> = Wrapping(0xffff);

@@ -51,10 +51,8 @@ impl Rng {
         self.state = [new0, new1, new2, new3].map(|x| x.0 as u16);
 
         // Calculate output function (XSH RR) using the old state.
-        let [_s0, s1, s2, s3] = [s0, s1, s2, s3].map(|x| Wrapping(x.0 as i32));
-        let xorshifted: u32 =
-            ((s3 << 21) + (((s3 >> 2) ^ s2) << 5) + (((s2 >> 2) ^ s1) >> 11)).0 as u32;
-        let fac: u32 = (xorshifted >> (s3.0 >> 11)) | (xorshifted << (-(s3.0 >> 11) & 31));
+        let xorshifted: u32 = ((s3 << 21) + (((s3 >> 2) ^ s2) << 5) + (((s2 >> 2) ^ s1) >> 11)).0;
+        let fac: u32 = (xorshifted >> (s3.0 >> 11)) | (xorshifted << (-(s3.0 as i32 >> 11) & 31));
         2.0f64.powi(-32) * f64::from(fac)
     }
 

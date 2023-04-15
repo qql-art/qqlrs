@@ -13,6 +13,7 @@ name = "qql"
 name = "qql-cli"
 
 [dependencies]
+hex-literal = "0.3.4"
 
 [dev-dependencies]
 hex-literal = "0.3.4"

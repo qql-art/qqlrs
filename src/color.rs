@@ -2,7 +2,7 @@ use std::collections::{hash_map::Entry::*, BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 
-pub const COLORS_JSON: &str = include_str!("colordata.json");
+const COLORS_JSON: &str = include_str!("colordata.json");
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -90,6 +90,12 @@ pub enum WireFormatError {
 }
 
 impl ColorDb {
+    pub fn from_bundle() -> Self {
+        let wire: WireColorDb =
+            serde_json::from_str(COLORS_JSON).expect("bundled data is invalid JSON");
+        ColorDb::from_wire(wire).expect("bundled data is not a valid database")
+    }
+
     pub fn from_wire(wire: WireColorDb) -> Result<Self, WireFormatError> {
         let mut db = ColorDb {
             colors: Vec::with_capacity(wire.colors.len()),
@@ -202,5 +208,17 @@ impl ColorDb {
             Seoul => "seoul",
         };
         self.palettes.get(name)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_color_db_from_bundle() {
+        let db = ColorDb::from_bundle();
+        assert!(!db.colors.is_empty());
+        assert!(!db.palettes.is_empty());
     }
 }

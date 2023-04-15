@@ -58,27 +58,20 @@ pub struct WireColorDb {
     palettes: Vec<WirePaletteSpec>,
 }
 
-type ColorKey = u32;
+pub type ColorKey = u32;
 
 #[derive(Debug, Serialize)]
 pub struct PaletteSpec {
-    swatches: Vec<u32>,
-    color_seq: Vec<u32>,
-    background_colors: Vec<BackgroundColorSpec>,
-    splatter_colors: Vec<SplatterColorSpec>,
+    pub swatches: Vec<u32>,
+    pub color_seq: Vec<u32>,
+    pub background_colors: Vec<(BackgroundColorSpec, f64)>,
+    pub splatter_colors: Vec<(ColorKey, f64)>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct BackgroundColorSpec {
-    color: ColorKey,
-    weight: f64,
-    substitutions: HashMap<ColorKey, Option<ColorKey>>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct SplatterColorSpec {
-    color: ColorKey,
-    weight: f64,
+    pub color: ColorKey,
+    pub substitutions: HashMap<ColorKey, Option<ColorKey>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -152,23 +145,18 @@ impl ColorDb {
                         })
                         .collect::<Result<HashMap<ColorKey, Option<ColorKey>>, WireFormatError>>(
                         )?;
-                    Ok(BackgroundColorSpec {
+                    let spec = BackgroundColorSpec {
                         color: find(bg)?,
-                        weight,
                         substitutions,
-                    })
+                    };
+                    Ok((spec, weight))
                 })
-                .collect::<Result<Vec<BackgroundColorSpec>, WireFormatError>>()?;
+                .collect::<Result<Vec<(BackgroundColorSpec, f64)>, WireFormatError>>()?;
             let splatter_colors = palette
                 .splatter_colors
                 .into_iter()
-                .map(|WireSplatterColorSpec(c, weight)| {
-                    Ok(SplatterColorSpec {
-                        color: find(c)?,
-                        weight,
-                    })
-                })
-                .collect::<Result<Vec<SplatterColorSpec>, WireFormatError>>()?;
+                .map(|WireSplatterColorSpec(c, weight)| Ok((find(c)?, weight)))
+                .collect::<Result<Vec<(ColorKey, f64)>, WireFormatError>>()?;
             palette_entry.insert(PaletteSpec {
                 swatches,
                 color_seq,
@@ -192,5 +180,27 @@ impl ColorDb {
                 palette: palette.into(),
             }),
         }
+    }
+
+    pub fn color(&self, key: ColorKey) -> Option<&ColorSpec> {
+        self.colors.get(key as usize)
+    }
+
+    pub fn color_by_name(&self, name: &str) -> Option<&ColorSpec> {
+        self.color(*self.colors_by_name.get(name)?)
+    }
+
+    pub fn palette(&self, palette_key: crate::traits::ColorPalette) -> Option<&PaletteSpec> {
+        use crate::traits::ColorPalette::*;
+        let name = match palette_key {
+            Austin => "austin",
+            Berlin => "berlin",
+            Edinburgh => "edinburgh",
+            Fidenza => "fidenza",
+            Miami => "miami",
+            Seattle => "seattle",
+            Seoul => "seoul",
+        };
+        self.palettes.get(name)
     }
 }

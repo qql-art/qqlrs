@@ -1,3 +1,4 @@
+use super::color::{ColorDb, ColorKey};
 use super::math::{modulo, pi, rescale};
 use super::rand::Rng;
 use super::traits::*;
@@ -5,13 +6,11 @@ use super::traits::*;
 // Use a constant width and height for all of our calculations to avoid
 // float-precision based differences across different window sizes.
 const VIRTUAL_W: f64 = 2000.0;
-#[allow(dead_code)]
 const VIRTUAL_H: f64 = 2500.0;
 
 fn w(v: f64) -> f64 {
     VIRTUAL_W * v
 }
-#[allow(dead_code)]
 fn h(v: f64) -> f64 {
     VIRTUAL_H * v
 }
@@ -420,7 +419,95 @@ impl BullseyeGenerator {
     }
 }
 
-pub fn draw(seed: &[u8; 32]) {
+#[derive(Debug)]
+pub struct ColorScheme {
+    pub background: ColorKey,
+    pub primary_seq: Vec<ColorKey>,
+    pub secondary_seq: Vec<ColorKey>,
+    pub splatter_odds: f64,
+    pub splatter_center: (f64, f64),
+    pub splatter_choices: Vec<ColorKey>,
+}
+
+impl ColorScheme {
+    pub fn from_traits(traits: &Traits, color_db: &ColorDb, rng: &mut Rng) -> Self {
+        let palette = color_db
+            .palette(traits.color_palette)
+            .unwrap_or_else(|| panic!("missing color data for palette {:?}", traits.color_palette));
+        let bg = rng.wc(&palette.background_colors);
+        let substitute = |c: ColorKey| -> Option<ColorKey> {
+            bg.substitutions.get(&c).copied().unwrap_or(Some(c))
+            // NOTE: `None` means "remove from palette", not "use original color"
+        };
+        let color_seq: Vec<ColorKey> = palette
+            .color_seq
+            .iter()
+            .copied()
+            .filter_map(substitute)
+            .collect();
+        let splatter_choices = {
+            let splatter_opts: Vec<(ColorKey, f64)> = palette
+                .splatter_colors
+                .iter()
+                .copied()
+                .filter_map(|(c, w)| Some((substitute(c)?, w)))
+                .collect();
+            let num_choices = usize::max(1, rng.gauss(1.5, 2.0).round() as usize);
+            let mut choices: Vec<ColorKey> = Vec::with_capacity(num_choices);
+            for _ in 0..num_choices {
+                choices.push(*rng.wc(&splatter_opts));
+            }
+            choices
+        };
+
+        use ColorVariety::*;
+        let splatter_odds_choices: &[(f64, f64)] = match traits.color_variety {
+            Low => &[(0.0, 4.0), (0.001, 2.0), (0.002, 2.0), (0.005, 2.0)],
+            Medium => &[
+                (0.0, 3.0),
+                (0.002, 2.0),
+                (0.005, 2.0),
+                (0.01, 1.0),
+                (0.03, 1.0),
+            ],
+            High => &[
+                (0.0, 3.0),
+                (0.002, 2.0),
+                (0.005, 2.0),
+                (0.01, 1.0),
+                (0.03, 1.0),
+                (0.08, 1.0),
+                (0.5, 0.05),
+            ],
+        };
+        let num_color_choices: &[(usize, u32)] = match traits.color_variety {
+            Low => &[(1, 1), (2, 3), (3, 4), (4, 5), (5, 3)],
+            Medium => &[(5, 1), (6, 2), (7, 3), (8, 5), (10, 3), (15, 2)],
+            High => &[(10, 3), (12, 4), (15, 5), (20, 3), (25, 3)],
+        };
+
+        let mut primary_seq = color_seq;
+        let mut secondary_seq = primary_seq.clone();
+        let num_primary_colors = *rng.wc(num_color_choices);
+        rng.winnow(&mut primary_seq, num_primary_colors);
+        let num_secondary_colors = *rng.wc(num_color_choices);
+        rng.winnow(&mut secondary_seq, num_secondary_colors);
+
+        let splatter_center = (rng.uniform(w(-0.1), w(1.1)), rng.uniform(h(-0.1), h(1.1)));
+        let splatter_odds = *rng.wc(splatter_odds_choices);
+
+        ColorScheme {
+            background: bg.color,
+            primary_seq,
+            secondary_seq,
+            splatter_odds,
+            splatter_center,
+            splatter_choices,
+        }
+    }
+}
+
+pub fn draw(seed: &[u8; 32], color_db: &ColorDb) {
     let mut rng = Rng::from_seed(&seed[..]);
     let traits = Traits::from_seed(seed);
     let _flow_field_spec = FlowFieldSpec::from_traits(&traits, &mut rng);
@@ -428,4 +515,21 @@ pub fn draw(seed: &[u8; 32]) {
     let _color_change_odds = ColorChangeOdds::from_traits(&traits, &mut rng);
     let _scale_generator = ScaleGenerator::from_traits(&traits, &mut rng);
     let _bullseye_generator = BullseyeGenerator::from_traits(&traits, &mut rng);
+    let _scheme = ColorScheme::from_traits(&traits, color_db, &mut rng);
+
+    let named_colors = |seq: &[ColorKey]| -> Vec<&str> {
+        seq.iter()
+            .map(|&i| color_db.color(i).unwrap().name.as_str())
+            .collect::<Vec<_>>()
+    };
+
+    println!("flow field spec: {:?}", _flow_field_spec);
+    println!("spacing spec: {:?}", _spacing_spec);
+    println!("color change odds: {:?}", _color_change_odds);
+    println!(
+        "background: {:?}",
+        color_db.color(_scheme.background).unwrap().name
+    );
+    println!("primary_seq: {:?}", named_colors(&_scheme.primary_seq));
+    println!("secondary_seq: {:?}", named_colors(&_scheme.secondary_seq));
 }

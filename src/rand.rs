@@ -41,7 +41,7 @@ impl Rng {
         const A3: Wrapping<u32> = Wrapping(0x1405);
 
         // Advance internal state.
-        let [s0, s1, s2, s3] = self.state.map(|x| Wrapping(x));
+        let [s0, s1, s2, s3] = self.state.map(Wrapping);
 
         let new0 = A0 + M0 * s0;
         let new1 = A1 + M0 * s1 + (M1 * s0 + (new0 >> 16));
@@ -104,7 +104,7 @@ impl Rng {
     ///
     /// Panics if `items.is_empty()`.
     pub fn choice<'a, T>(&mut self, items: &'a [T]) -> &'a T {
-        &items
+        items
             .get(self.uniform(0.0, items.len() as f64) as usize)
             .expect("no items")
     }

@@ -1,4 +1,4 @@
-use super::math::{modulo, pi};
+use super::math::{modulo, pi, rescale};
 use super::rand::Rng;
 use super::traits::*;
 
@@ -358,6 +358,66 @@ impl ScaleGenerator {
     }
 }
 
+type RingCount = u32; // 1, 2, 3, or 7
+pub struct BullseyeGenerator {
+    density_mean: f64,
+    density_variance: f64,
+    weighted_ring_options: Vec<(RingCount, f64)>,
+}
+#[derive(Debug, Copy, Clone)]
+pub struct Bullseye {
+    rings: RingCount,
+    density: f64,
+}
+
+impl BullseyeGenerator {
+    pub fn from_traits(traits: &Traits, rng: &mut Rng) -> Self {
+        let mut potential_ring_counts: Vec<RingCount> = Vec::with_capacity(3);
+        if traits.bullseye_rings.one {
+            potential_ring_counts.push(1);
+        }
+        if traits.bullseye_rings.three {
+            potential_ring_counts.push(3);
+        }
+        if traits.bullseye_rings.seven {
+            potential_ring_counts.push(7);
+        }
+        if potential_ring_counts.is_empty() {
+            potential_ring_counts.push(2);
+        }
+
+        let (density_mean, density_variance) = match traits.ring_thickness {
+            RingThickness::Thin => (0.85, 0.15),
+            RingThickness::Thick => (0.28, 0.1),
+            RingThickness::Mixed => (0.7, 1.0),
+        };
+        let dropoff = rescale(density_variance, (0.0, 1.0), (1.0, 0.35));
+
+        let mut weight = 1.0;
+        let mut n = potential_ring_counts.len() * 2;
+        let mut weighted_ring_options = Vec::with_capacity(n);
+        while n > 0 && weight > 0.001 {
+            weighted_ring_options.push((*rng.choice(&potential_ring_counts[..]), weight));
+            n -= 1;
+            weight *= dropoff;
+        }
+
+        BullseyeGenerator {
+            density_mean,
+            density_variance,
+            weighted_ring_options,
+        }
+    }
+
+    pub fn next(&self, rng: &mut Rng) -> Bullseye {
+        let density = rng
+            .gauss(self.density_mean, self.density_variance / 2.0)
+            .clamp(0.17, 0.93);
+        let rings = *rng.wc(&self.weighted_ring_options[..]);
+        Bullseye { rings, density }
+    }
+}
+
 pub fn draw(seed: &[u8; 32]) {
     let mut rng = Rng::from_seed(&seed[..]);
     let traits = Traits::from_seed(seed);
@@ -365,10 +425,8 @@ pub fn draw(seed: &[u8; 32]) {
     let spacing_spec = SpacingSpec::from_traits(&traits, &mut rng);
     let color_change_odds = ColorChangeOdds::from_traits(&traits, &mut rng);
     let scale_generator = ScaleGenerator::from_traits(&traits, &mut rng);
-    for _ in 0..3 {
-        for _ in 0..3 {
-            println!("{}", scale_generator.next(&mut rng));
-        }
-        println!();
+    let bullseye_generator = BullseyeGenerator::from_traits(&traits, &mut rng);
+    for _ in 0..5 {
+        println!("{:?}", bullseye_generator.next(&mut rng));
     }
 }

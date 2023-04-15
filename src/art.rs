@@ -5,11 +5,13 @@ use super::traits::*;
 // Use a constant width and height for all of our calculations to avoid
 // float-precision based differences across different window sizes.
 const VIRTUAL_W: f64 = 2000.0;
+#[allow(dead_code)]
 const VIRTUAL_H: f64 = 2500.0;
 
 fn w(v: f64) -> f64 {
     VIRTUAL_W * v
 }
+#[allow(dead_code)]
 fn h(v: f64) -> f64 {
     VIRTUAL_H * v
 }
@@ -86,8 +88,8 @@ impl FlowFieldSpec {
 
 #[derive(Debug, Copy, Clone)]
 pub struct SpacingSpec {
-    multiplier: f64,
-    constant: f64,
+    pub multiplier: f64,
+    pub constant: f64,
 }
 
 impl SpacingSpec {
@@ -144,9 +146,9 @@ impl SpacingSpec {
 }
 
 #[derive(Debug, Copy, Clone)]
-struct ColorChangeOdds {
-    group: f64,
-    line: f64,
+pub struct ColorChangeOdds {
+    pub group: f64,
+    pub line: f64,
 }
 
 impl ColorChangeOdds {
@@ -360,14 +362,14 @@ impl ScaleGenerator {
 
 type RingCount = u32; // 1, 2, 3, or 7
 pub struct BullseyeGenerator {
-    density_mean: f64,
-    density_variance: f64,
-    weighted_ring_options: Vec<(RingCount, f64)>,
+    pub density_mean: f64,
+    pub density_variance: f64,
+    pub weighted_ring_options: Vec<(RingCount, f64)>,
 }
 #[derive(Debug, Copy, Clone)]
 pub struct Bullseye {
-    rings: RingCount,
-    density: f64,
+    pub rings: RingCount,
+    pub density: f64,
 }
 
 impl BullseyeGenerator {
@@ -421,12 +423,9 @@ impl BullseyeGenerator {
 pub fn draw(seed: &[u8; 32]) {
     let mut rng = Rng::from_seed(&seed[..]);
     let traits = Traits::from_seed(seed);
-    let flow_field_spec = FlowFieldSpec::from_traits(&traits, &mut rng);
-    let spacing_spec = SpacingSpec::from_traits(&traits, &mut rng);
-    let color_change_odds = ColorChangeOdds::from_traits(&traits, &mut rng);
-    let scale_generator = ScaleGenerator::from_traits(&traits, &mut rng);
-    let bullseye_generator = BullseyeGenerator::from_traits(&traits, &mut rng);
-    for _ in 0..5 {
-        println!("{:?}", bullseye_generator.next(&mut rng));
-    }
+    let _flow_field_spec = FlowFieldSpec::from_traits(&traits, &mut rng);
+    let _spacing_spec = SpacingSpec::from_traits(&traits, &mut rng);
+    let _color_change_odds = ColorChangeOdds::from_traits(&traits, &mut rng);
+    let _scale_generator = ScaleGenerator::from_traits(&traits, &mut rng);
+    let _bullseye_generator = BullseyeGenerator::from_traits(&traits, &mut rng);
 }

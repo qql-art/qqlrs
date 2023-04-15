@@ -112,16 +112,22 @@ impl Rng {
     /// Given a slice of `(item, weight)` pairs, chooses an `item` with probability proportional to
     /// its `weight`. (The name `wc` is short for *weighted choice*.)
     ///
+    /// Weights can be `u32`, `f64`, or any other type that can be [converted into
+    /// `f64`][std::convert::Into].
+    ///
     /// # Panics
     ///
     /// Panics if `weighted_items.is_empty()`.
-    pub fn wc<'a, T>(&mut self, weighted_items: &'a [(T, u32)]) -> &'a T {
-        let sum_weight: u32 = weighted_items.iter().map(|(_, w)| w).sum();
-        let bisection = f64::ceil(sum_weight as f64 * self.rnd()) as u32;
+    pub fn wc<'a, T, Weight: Into<f64> + Copy>(
+        &mut self,
+        weighted_items: &'a [(T, Weight)],
+    ) -> &'a T {
+        let sum_weight: f64 = weighted_items.iter().map(|(_, w)| (*w).into()).sum();
+        let bisection = sum_weight * self.rnd();
 
-        let mut cum_weight: u32 = 0;
+        let mut cum_weight: f64 = 0.0;
         for (value, weight) in weighted_items {
-            cum_weight += weight;
+            cum_weight += (*weight).into();
             if cum_weight >= bisection {
                 return value;
             }
@@ -341,6 +347,21 @@ mod test {
         assert_eq!(
             counts,
             HashMap::from([("red", 1692), ("green", 4983), ("blue", 3325)])
+        );
+    }
+
+    #[test]
+    fn test_wc_with_float_weights_sequence() {
+        let mut rng = Rng::from_seed(b"");
+
+        let choices = &[("red", 1.3), ("green", 3.0), ("blue", 3.0)];
+        let values: [&str; 20] = std::array::from_fn(|_| *rng.wc(choices));
+        assert_eq!(
+            values,
+            [
+                "blue", "green", "green", "blue", "blue", "blue", "red", "green", "blue", "green",
+                "blue", "blue", "green", "blue", "green", "blue", "green", "blue", "blue", "red"
+            ]
         );
     }
 

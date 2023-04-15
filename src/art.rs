@@ -187,11 +187,188 @@ impl ColorChangeOdds {
     }
 }
 
+#[derive(Debug)]
+pub enum ScaleGenerator {
+    Constant {
+        mean: f64,
+    },
+    Variable {
+        mean: f64,
+        choices: &'static [(f64, f64)],
+    },
+    Wild {
+        mean: f64,
+        choices: &'static [(f64, f64)],
+    },
+}
+
+impl ScaleGenerator {
+    pub fn next(&self, rng: &mut Rng) -> f64 {
+        match *self {
+            ScaleGenerator::Constant { mean } => rng.gauss(mean, w(0.01).min(mean * 0.05)),
+            ScaleGenerator::Variable { mean, .. } => rng.gauss(mean, w(0.035).min(mean * 0.15)),
+            ScaleGenerator::Wild { mean, .. } => rng.gauss(mean, mean * 0.3),
+        }
+    }
+
+    pub fn change(&mut self, rng: &mut Rng) {
+        match self {
+            ScaleGenerator::Constant { .. } => (),
+            ScaleGenerator::Variable { mean, choices } => {
+                *mean = *rng.wc(choices);
+                *mean = rng.gauss(*mean, *mean * 0.1);
+            }
+            ScaleGenerator::Wild { mean, choices } => {
+                *mean = *rng.wc(choices);
+                *mean = rng.gauss(*mean, *mean * 0.3);
+            }
+        }
+    }
+
+    pub fn from_traits(traits: &Traits, rng: &mut Rng) -> ScaleGenerator {
+        const XS: &[f64] = &[
+            VIRTUAL_W * 0.0018, // 0
+            VIRTUAL_W * 0.0025, // 1
+        ];
+        const S: &[f64] = &[
+            VIRTUAL_W * 0.003, // 0
+            VIRTUAL_W * 0.004, // 1
+            VIRTUAL_W * 0.006, // 2
+        ];
+        const M: &[f64] = &[
+            VIRTUAL_W * 0.012, // 0
+            VIRTUAL_W * 0.017, // 1
+            VIRTUAL_W * 0.023, // 2
+            VIRTUAL_W * 0.048, // 3
+        ];
+        const L: &[f64] = &[
+            VIRTUAL_W * 0.1,  // 0
+            VIRTUAL_W * 0.15, // 1
+            VIRTUAL_W * 0.2,  // 2
+            VIRTUAL_W * 0.3,  // 3
+        ];
+
+        use RingSize::*;
+        use SizeVariety::*;
+
+        match traits.size_variety {
+            Constant => {
+                const WC_S: &[(f64, u32)] = &[(XS[1], 2), (S[0], 3), (S[1], 2), (S[2], 1)];
+                const WC_M: &[(f64, u32)] = &[(M[0], 2), (M[1], 3), (M[2], 2), (M[3], 1)];
+                const WC_L: &[(f64, u32)] = &[(L[0], 3), (L[1], 2), (L[2], 1)];
+                let choices = match traits.ring_size {
+                    Small => WC_S,
+                    Medium => WC_M,
+                    Large => WC_L,
+                };
+                let mean = *rng.wc(choices);
+                if mean.is_nan() || mean == 0.0 {
+                    panic!("bad scale");
+                }
+                ScaleGenerator::Constant { mean }
+            }
+
+            Variable => {
+                const WC_S: &[(f64, f64)] = &[
+                    (XS[1], 1.3),
+                    (S[0], 2.0),
+                    (S[1], 5.0),
+                    (S[2], 8.0),
+                    (M[0], 3.0),
+                ];
+                const WC_M: &[(f64, f64)] = &[
+                    (S[2], 2.0),
+                    (M[0], 8.0),
+                    (M[1], 8.0),
+                    (M[2], 13.0),
+                    (M[3], 8.0),
+                    (L[0], 5.0),
+                ];
+                const WC_L: &[(f64, f64)] = &[
+                    (M[1], 0.5),
+                    (M[2], 2.0),
+                    (M[3], 2.0),
+                    (L[0], 5.0),
+                    (L[1], 8.0),
+                    (L[2], 8.0),
+                    (L[3], 4.0),
+                ];
+                let choices = match traits.ring_size {
+                    Small => WC_S,
+                    Medium => WC_M,
+                    Large => WC_L,
+                };
+                let mean = *rng.wc(choices);
+                ScaleGenerator::Variable { mean, choices }
+            }
+
+            Wild => {
+                const SC_S: &[f64] = &[S[1], S[2], M[0], M[1], M[2]];
+                const SC_M: &[f64] = &[S[2], M[0], M[1], M[2], M[3], L[0], L[1]];
+                const SC_L: &[f64] = &[L[0], L[1], L[2], L[3]];
+
+                const WC_S: &[(f64, f64)] = &[
+                    (XS[0], 3.0),
+                    (XS[1], 3.0),
+                    (S[0], 3.0),
+                    (S[1], 4.0),
+                    (S[2], 4.0),
+                    (M[0], 3.0),
+                    (M[1], 3.0),
+                    (M[2], 3.0),
+                ];
+                const WC_M: &[(f64, f64)] = &[
+                    (XS[0], 1.0),
+                    (XS[1], 1.0),
+                    (S[0], 1.0),
+                    (S[1], 1.0),
+                    (S[2], 2.0),
+                    (M[0], 3.0),
+                    (M[1], 3.0),
+                    (M[2], 3.0),
+                    (M[3], 3.0),
+                    (L[0], 2.0),
+                    (L[1], 2.0),
+                    (L[2], 1.0),
+                ];
+                const WC_L: &[(f64, f64)] = &[
+                    (XS[0], 1.0),
+                    (XS[1], 1.0),
+                    (S[0], 1.0),
+                    (S[1], 1.0),
+                    (S[2], 1.0),
+                    (M[0], 1.0),
+                    (M[1], 1.0),
+                    (M[2], 1.0),
+                    (L[0], 2.0),
+                    (L[1], 5.0),
+                    (L[2], 5.0),
+                    (L[3], 5.0),
+                ];
+
+                let (start_choices, choices) = match traits.ring_size {
+                    Small => (SC_S, WC_S),
+                    Medium => (SC_M, WC_M),
+                    Large => (SC_L, WC_L),
+                };
+                let mean = *rng.choice(start_choices);
+                ScaleGenerator::Wild { mean, choices }
+            }
+        }
+    }
+}
+
 pub fn draw(seed: &[u8; 32]) {
     let mut rng = Rng::from_seed(&seed[..]);
     let traits = Traits::from_seed(seed);
     let flow_field_spec = FlowFieldSpec::from_traits(&traits, &mut rng);
     let spacing_spec = SpacingSpec::from_traits(&traits, &mut rng);
     let color_change_odds = ColorChangeOdds::from_traits(&traits, &mut rng);
-    dbg!(traits, flow_field_spec, spacing_spec, color_change_odds); // TODO
+    let scale_generator = ScaleGenerator::from_traits(&traits, &mut rng);
+    for _ in 0..3 {
+        for _ in 0..3 {
+            println!("{}", scale_generator.next(&mut rng));
+        }
+        println!();
+    }
 }

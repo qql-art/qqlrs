@@ -1,6 +1,7 @@
 use super::color::{ColorDb, ColorKey};
 use super::math::{angle, dist, modulo, pi, rescale};
 use super::rand::Rng;
+use super::sectors::Sectors;
 use super::traits::*;
 
 // Use a constant width and height for all of our calculations to avoid
@@ -713,6 +714,15 @@ impl IgnoreFlowField {
     }
 }
 
+fn build_sectors<T>() -> Sectors<T> {
+    const CHECK_MARGIN: f64 = 0.05;
+    const CHECK_LEFT: f64 = -VIRTUAL_W * CHECK_MARGIN;
+    const CHECK_RIGHT: f64 = VIRTUAL_W + VIRTUAL_W * CHECK_MARGIN;
+    const CHECK_TOP: f64 = -VIRTUAL_H * CHECK_MARGIN;
+    const CHECK_BOTTOM: f64 = VIRTUAL_H + VIRTUAL_H * CHECK_MARGIN;
+    Sectors::new(CHECK_LEFT, CHECK_RIGHT, CHECK_TOP, CHECK_BOTTOM)
+}
+
 pub fn draw(seed: &[u8; 32], color_db: &ColorDb) {
     let traits = Traits::from_seed(seed);
     println!("traits: {:#?}", traits);
@@ -728,6 +738,8 @@ pub fn draw(seed: &[u8; 32], color_db: &ColorDb) {
     let _flow_field = FlowField::build(&flow_field_spec, &traits, &mut rng);
     let _ignore_flow_field = IgnoreFlowField::build(&mut rng);
     let _start_points = crate::layouts::generate_start_points(traits.structure, &mut rng);
+
+    let _sectors: Sectors<(f64, f64, f64)> = build_sectors();
 
     let named_colors = |seq: &[ColorKey]| -> Vec<&str> {
         seq.iter()

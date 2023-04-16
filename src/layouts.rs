@@ -6,11 +6,13 @@ use super::traits::Structure;
 #[derive(Debug)]
 pub struct StartPointGroups(pub Vec<Vec<(f64, f64)>>);
 
-pub fn generate_start_points(structure: Structure, rng: &mut Rng) -> StartPointGroups {
-    match structure {
-        Structure::Orbital => orbital(rng),
-        Structure::Shadows => shadows(rng),
-        Structure::Formation => formation(rng),
+impl StartPointGroups {
+    pub fn build(structure: Structure, rng: &mut Rng) -> StartPointGroups {
+        match structure {
+            Structure::Orbital => orbital(rng),
+            Structure::Shadows => shadows(rng),
+            Structure::Formation => formation(rng),
+        }
     }
 }
 

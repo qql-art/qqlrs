@@ -1,5 +1,5 @@
 use super::color::{ColorDb, ColorKey};
-use super::layouts::{self, StartPointGroups};
+use super::layouts::StartPointGroups;
 use super::math::{angle, cos, dist, modulo, pi, rescale, sin};
 use super::rand::Rng;
 use super::sectors::Sectors;
@@ -810,7 +810,7 @@ pub fn draw(seed: &[u8; 32], color_db: &ColorDb) {
 
     let flow_field = FlowField::build(&flow_field_spec, &traits, &mut rng);
     let ignore_flow_field = IgnoreFlowField::build(&flow_field_spec, &mut rng);
-    let start_points = layouts::generate_start_points(traits.structure, &mut rng);
+    let start_points = StartPointGroups::build(traits.structure, &mut rng);
 
     println!(
         "flow field ({}x{}): top-left {:?}, bottom-right {:?}",

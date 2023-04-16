@@ -43,10 +43,10 @@ fn test_flow_field_dimensions() {
     assert_eq!(cols, FLOW_FIELD_ROWS);
 }
 
-fn w(v: f64) -> f64 {
+pub(crate) fn w(v: f64) -> f64 {
     VIRTUAL_W * v
 }
-fn h(v: f64) -> f64 {
+pub(crate) fn h(v: f64) -> f64 {
     VIRTUAL_H * v
 }
 
@@ -715,6 +715,7 @@ impl IgnoreFlowField {
 
 pub fn draw(seed: &[u8; 32], color_db: &ColorDb) {
     let traits = Traits::from_seed(seed);
+    println!("traits: {:#?}", traits);
     let mut rng = Rng::from_seed(&seed[..]);
 
     let flow_field_spec = FlowFieldSpec::from_traits(&traits, &mut rng);
@@ -726,6 +727,7 @@ pub fn draw(seed: &[u8; 32], color_db: &ColorDb) {
 
     let _flow_field = FlowField::build(&flow_field_spec, &traits, &mut rng);
     let _ignore_flow_field = IgnoreFlowField::build(&mut rng);
+    let _start_points = crate::layouts::generate_start_points(traits.structure, &mut rng);
 
     let named_colors = |seq: &[ColorKey]| -> Vec<&str> {
         seq.iter()
@@ -751,4 +753,24 @@ pub fn draw(seed: &[u8; 32], color_db: &ColorDb) {
         _flow_field.0.last().unwrap().last().unwrap()
     );
     println!("ignore flow field: {:?}", _ignore_flow_field);
+
+    println!("start points groups (len={}):", _start_points.0.len());
+    {
+        let g0 = _start_points.0.first().unwrap();
+        println!(
+            "    first group (len={}) = {:?} ... {:?}",
+            g0.len(),
+            g0.first().unwrap(),
+            g0.last().unwrap()
+        );
+    }
+    {
+        let glast = _start_points.0.last().unwrap();
+        println!(
+            "    last group  (len={}) = {:?} ... {:?}",
+            glast.len(),
+            glast.first().unwrap(),
+            glast.last().unwrap()
+        );
+    }
 }

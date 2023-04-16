@@ -1,5 +1,6 @@
 use super::color::{ColorDb, ColorKey};
-use super::math::{angle, dist, modulo, pi, rescale};
+use super::layouts::{self, StartPointGroups};
+use super::math::{angle, cos, dist, modulo, pi, rescale, sin};
 use super::rand::Rng;
 use super::sectors::Sectors;
 use super::traits::*;
@@ -60,7 +61,7 @@ pub enum FlowFieldSpec {
         circularity: f64,
         direction: Direction,
         rotation: Rotation,
-        default_theta: f64, // still needed for `ignore_flow_fields`
+        default_theta: f64, // still needed for `ignore_flow_field`
     },
 }
 #[derive(Debug, Copy, Clone)]
@@ -118,6 +119,13 @@ impl FlowFieldSpec {
             FlowField::Spiral => radial(rng.uniform(0.4, 0.75), rng),
             FlowField::Circular => radial(rng.uniform(0.75, 1.02).min(1.0), rng),
             FlowField::RandomRadial => radial(rng.uniform(-0.01, 1.01).clamp(0.0, 1.0), rng),
+        }
+    }
+
+    fn default_theta(&self) -> f64 {
+        match *self {
+            FlowFieldSpec::Linear { default_theta, .. } => default_theta,
+            FlowFieldSpec::Radial { default_theta, .. } => default_theta,
         }
     }
 }
@@ -705,12 +713,77 @@ impl Disturbance {
 #[derive(Debug, Copy, Clone)]
 pub struct IgnoreFlowField {
     pub odds: f64,
+    pub default_theta: f64,
 }
 
 impl IgnoreFlowField {
-    pub fn build(rng: &mut Rng) -> Self {
+    pub fn build(flow_field_spec: &FlowFieldSpec, rng: &mut Rng) -> Self {
+        let default_theta = flow_field_spec.default_theta();
         let odds = *rng.wc(&[(0.0, 10), (0.5, 2), (0.8, 1), (0.9, 1)]);
-        IgnoreFlowField { odds }
+        IgnoreFlowField {
+            odds,
+            default_theta,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct GroupedFlowLines(pub Vec<FlowLineGroup>);
+type FlowLineGroup = Vec<FlowLine>;
+type FlowLine = Vec<(f64, f64)>;
+
+impl GroupedFlowLines {
+    pub fn build(
+        flow_field: FlowField,
+        ignore_flow_field: IgnoreFlowField,
+        start_point_groups: StartPointGroups,
+        rng: &mut Rng,
+    ) -> Self {
+        let curve_length = *rng.choice(&[500, 650, 850]);
+        let groups = start_point_groups
+            .0
+            .into_iter()
+            .map(|group| {
+                Self::build_group(group, curve_length, &flow_field, &ignore_flow_field, rng)
+            })
+            .collect::<Vec<FlowLineGroup>>();
+        GroupedFlowLines(groups)
+    }
+
+    fn build_group(
+        start_points: Vec<(f64, f64)>,
+        curve_length: usize,
+        flow_field: &FlowField,
+        ignore_flow_field: &IgnoreFlowField,
+        rng: &mut Rng,
+    ) -> FlowLineGroup {
+        let ignore = rng.odds(ignore_flow_field.odds);
+        let step = w(0.002);
+        start_points
+            .into_iter()
+            .map(|(mut x, mut y)| {
+                let mut curve: FlowLine = Vec::with_capacity(curve_length);
+                for _ in 0..curve_length {
+                    #[allow(clippy::manual_range_contains)]
+                    if x < LX || x >= RX || y < TY || y >= BY {
+                        // Terminate the flow line as it has exited the flow field boundary.
+                        curve.shrink_to_fit();
+                        break;
+                    }
+                    let xi = ((x - LX) / SPC).floor() as usize;
+                    let yi = ((y - TY) / SPC).floor() as usize;
+                    let theta = if ignore {
+                        ignore_flow_field.default_theta
+                    } else {
+                        flow_field.0[xi][yi]
+                    };
+                    curve.push((x, y));
+                    x += step * cos(theta);
+                    y += step * sin(theta);
+                }
+                curve
+            })
+            .collect()
     }
 }
 
@@ -735,9 +808,40 @@ pub fn draw(seed: &[u8; 32], color_db: &ColorDb) {
     let _bullseye_generator = BullseyeGenerator::from_traits(&traits, &mut rng);
     let _scheme = ColorScheme::from_traits(&traits, color_db, &mut rng);
 
-    let _flow_field = FlowField::build(&flow_field_spec, &traits, &mut rng);
-    let _ignore_flow_field = IgnoreFlowField::build(&mut rng);
-    let _start_points = crate::layouts::generate_start_points(traits.structure, &mut rng);
+    let flow_field = FlowField::build(&flow_field_spec, &traits, &mut rng);
+    let ignore_flow_field = IgnoreFlowField::build(&flow_field_spec, &mut rng);
+    let start_points = layouts::generate_start_points(traits.structure, &mut rng);
+
+    println!(
+        "flow field ({}x{}): top-left {:?}, bottom-right {:?}",
+        flow_field.0.len(),
+        flow_field.0[0].len(),
+        flow_field.0.first().unwrap().first().unwrap(),
+        flow_field.0.last().unwrap().last().unwrap()
+    );
+    println!("ignore flow field: {:?}", ignore_flow_field);
+    println!("start points groups (len={}):", start_points.0.len());
+    {
+        let g0 = start_points.0.first().unwrap();
+        println!(
+            "    first group (len={}) = {:?} ... {:?}",
+            g0.len(),
+            g0.first().unwrap(),
+            g0.last().unwrap()
+        );
+    }
+    {
+        let glast = start_points.0.last().unwrap();
+        println!(
+            "    last group  (len={}) = {:?} ... {:?}",
+            glast.len(),
+            glast.first().unwrap(),
+            glast.last().unwrap()
+        );
+    }
+
+    let _grouped_flow_lines =
+        GroupedFlowLines::build(flow_field, ignore_flow_field, start_points, &mut rng);
 
     let _sectors: Sectors<(f64, f64, f64)> = build_sectors();
 
@@ -756,33 +860,4 @@ pub fn draw(seed: &[u8; 32], color_db: &ColorDb) {
     );
     println!("primary_seq: {:?}", named_colors(&_scheme.primary_seq));
     println!("secondary_seq: {:?}", named_colors(&_scheme.secondary_seq));
-
-    println!(
-        "flow field ({}x{}): top-left {:?}, bottom-right {:?}",
-        _flow_field.0.len(),
-        _flow_field.0[0].len(),
-        _flow_field.0.first().unwrap().first().unwrap(),
-        _flow_field.0.last().unwrap().last().unwrap()
-    );
-    println!("ignore flow field: {:?}", _ignore_flow_field);
-
-    println!("start points groups (len={}):", _start_points.0.len());
-    {
-        let g0 = _start_points.0.first().unwrap();
-        println!(
-            "    first group (len={}) = {:?} ... {:?}",
-            g0.len(),
-            g0.first().unwrap(),
-            g0.last().unwrap()
-        );
-    }
-    {
-        let glast = _start_points.0.last().unwrap();
-        println!(
-            "    last group  (len={}) = {:?} ... {:?}",
-            glast.len(),
-            glast.first().unwrap(),
-            glast.last().unwrap()
-        );
-    }
 }

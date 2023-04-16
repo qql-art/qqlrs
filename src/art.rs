@@ -1,5 +1,5 @@
 use super::color::{ColorDb, ColorKey};
-use super::math::{modulo, pi, rescale};
+use super::math::{angle, dist, modulo, pi, rescale};
 use super::rand::Rng;
 use super::traits::*;
 
@@ -7,6 +7,41 @@ use super::traits::*;
 // float-precision based differences across different window sizes.
 const VIRTUAL_W: f64 = 2000.0;
 const VIRTUAL_H: f64 = 2500.0;
+
+// Flow field boundaries, in virtual canvas space.
+const LX: f64 = VIRTUAL_W * -0.2;
+const RX: f64 = VIRTUAL_W * 1.2;
+const TY: f64 = VIRTUAL_H * -0.2;
+const BY: f64 = VIRTUAL_H * 1.2;
+
+const SPC: f64 = 5.0; // spacing of points in the field, on each axis
+const FLOW_FIELD_ROWS: usize = 700;
+const FLOW_FIELD_COLS: usize = 560;
+
+/// Tests that the hard-coded values for [`SPC`], [`FLOW_FIELD_ROWS`], and [`FLOW_FIELD_COLS`]
+/// match the computed values used (either implicitly or explicitly) in the JavaScript algorithm.
+/// These are hard-coded because we can't use [`f64::floor`] and friends in a const context.
+#[cfg(test)]
+#[test]
+fn test_flow_field_dimensions() {
+    assert_eq!(SPC, (VIRTUAL_W * 0.0025).floor());
+
+    let mut x = LX;
+    let mut cols = 0;
+    while x < RX {
+        cols += 1;
+        x += SPC;
+    }
+    assert_eq!(cols, FLOW_FIELD_COLS);
+
+    let mut y = TY;
+    let mut cols = 0;
+    while y < BY {
+        cols += 1;
+        y += SPC;
+    }
+    assert_eq!(cols, FLOW_FIELD_ROWS);
+}
 
 fn w(v: f64) -> f64 {
     VIRTUAL_W * v
@@ -72,6 +107,7 @@ impl FlowFieldSpec {
             }
         }
 
+        use super::traits::FlowField; // shadow `self::FlowField`
         match traits.flow_field {
             FlowField::Horizontal => linear(pi(0.0), rng),
             FlowField::Diagonal => linear(pi(0.25), rng),
@@ -507,15 +543,189 @@ impl ColorScheme {
     }
 }
 
+// NOTE: This struct definition shadows the `traits::FlowField` enum.
+#[derive(Debug)]
+pub struct FlowField(pub Box<[[f64; FLOW_FIELD_ROWS]; FLOW_FIELD_COLS]>);
+
+impl FlowField {
+    pub fn build(spec: &FlowFieldSpec, traits: &Traits, rng: &mut Rng) -> Self {
+        let mut ff = match spec {
+            FlowFieldSpec::Linear { default_theta } => Self::raw_linear(*default_theta),
+            FlowFieldSpec::Radial {
+                circularity,
+                direction,
+                rotation,
+                default_theta: _,
+            } => Self::raw_circular(*circularity, *direction, *rotation, traits.version, rng),
+        };
+        let disturbances = Disturbance::build(traits, rng);
+        ff.adjust(&disturbances);
+        ff
+    }
+
+    fn raw_linear(default_theta: f64) -> Self {
+        FlowField(Box::new(
+            [[default_theta; FLOW_FIELD_ROWS]; FLOW_FIELD_COLS],
+        ))
+    }
+
+    fn raw_circular(
+        circularity: f64,
+        direction: Direction,
+        rotation: Rotation,
+        version: Version,
+        rng: &mut Rng,
+    ) -> Self {
+        let mut rot = circularity / 2.0;
+        if let Direction::Out = direction {
+            rot = 1.0 - rot;
+        }
+        if let Rotation::Cw = rotation {
+            rot = 2.0 - rot;
+        }
+        rot = pi(rot);
+
+        let mut flow_points = Box::new([[0.0; FLOW_FIELD_ROWS]; FLOW_FIELD_COLS]);
+
+        let cx = {
+            let fst = rng.uniform(w(0.0), w(1.0));
+            *rng.wc(&[
+                (fst, 2.0),
+                (w(-2.0 / 3.0), 0.5),
+                (w(-1.0 / 3.0), 1.0),
+                (w(0.0), 1.0),
+                (w(1.0 / 3.0), 1.5),
+                (w(1.0 / 2.0), 1.5),
+                (w(2.0 / 3.0), 1.5),
+                (w(1.0), 1.5),
+                (w(4.0 / 3.0), 1.0),
+                (w(5.0 / 3.0), 0.5),
+            ])
+        };
+        let fixed_weight = match version {
+            Version::V1 => 0.5,
+            _ => f64::NAN, // bug-compatibility with older versions
+        };
+        let cy = {
+            let fst = rng.uniform(h(0.0), h(1.0));
+            *rng.wc(&[
+                (fst, 2.0),
+                (h(-2.0 / 3.0), fixed_weight),
+                (h(-1.0 / 3.0), 1.0),
+                (h(0.0), 1.0),
+                (h(1.0 / 3.0), 1.5),
+                (h(1.0 / 2.0), 1.5),
+                (h(2.0 / 3.0), 1.5),
+                (h(1.0), 1.0),
+                (h(4.0 / 3.0), 1.0),
+                (h(5.0 / 3.0), 0.5),
+            ])
+        };
+
+        let mut x = LX;
+        for col in &mut *flow_points {
+            let mut y = TY;
+            for point in col {
+                let mut a = angle((x, y), (cx, cy));
+                if a.is_nan() {
+                    a = 0.0;
+                }
+                *point = a + rot;
+                y += SPC;
+            }
+            x += SPC;
+        }
+        FlowField(flow_points)
+    }
+
+    fn adjust(&mut self, disturbances: &[Disturbance]) {
+        for d in disturbances {
+            let Disturbance {
+                center: (cx, cy),
+                theta,
+                radius,
+            } = d;
+            let (min_x, max_x) = (cx - radius, cx + radius);
+            let (min_y, max_y) = (cy - radius, cy + radius);
+
+            let min_i = usize::max(0, ((min_x - LX) / SPC).floor() as usize);
+            let max_i = usize::min(FLOW_FIELD_COLS - 1, ((max_x - LX) / SPC).ceil() as usize);
+            let min_j = usize::max(0, ((min_y - TY) / SPC).floor() as usize);
+            let max_j = usize::min(FLOW_FIELD_ROWS - 1, ((max_y - TY) / SPC).ceil() as usize);
+
+            for i in min_i..=max_i {
+                let x = LX + SPC * i as f64;
+                for j in min_j..=max_j {
+                    let y = TY + SPC * j as f64;
+                    let dist = dist((*cx, *cy), (x, y));
+                    let theta_adjust = rescale(dist, (0.0, *radius), (*theta, 0.0));
+                    self.0[i][j] += theta_adjust;
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct Disturbance {
+    center: (f64, f64),
+    theta: f64,
+    radius: f64,
+}
+
+impl Disturbance {
+    fn build(traits: &Traits, rng: &mut Rng) -> Vec<Self> {
+        let num: usize = match traits.turbulence {
+            Turbulence::None => 0,
+            Turbulence::Low => *rng.wc(&[(10, 2), (15, 3), (20, 2), (30, 1)]),
+            Turbulence::High => *rng.wc(&[(20, 1), (30, 2), (40, 3), (50, 2), (60, 1)]),
+        };
+        let theta_variance: f64 = match traits.turbulence {
+            Turbulence::None => 0.0,
+            Turbulence::Low => *rng.wc(&[(pi(0.005), 1), (pi(0.01), 1)]),
+            Turbulence::High => *rng.wc(&[(pi(0.05), 1), (pi(0.1), 1), (pi(0.15), 1)]),
+        };
+
+        let mut disturbances = Vec::with_capacity(num);
+        for _ in 0..num {
+            let center = (rng.uniform(LX, RX), rng.uniform(TY, BY));
+            let theta = rng.gauss(0.0, theta_variance);
+            let radius = rng.gauss(w(0.35), w(0.35)).abs().max(w(0.1));
+            disturbances.push(Disturbance {
+                center,
+                theta,
+                radius,
+            })
+        }
+        disturbances
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct IgnoreFlowField {
+    pub odds: f64,
+}
+
+impl IgnoreFlowField {
+    pub fn build(rng: &mut Rng) -> Self {
+        let odds = *rng.wc(&[(0.0, 10), (0.5, 2), (0.8, 1), (0.9, 1)]);
+        IgnoreFlowField { odds }
+    }
+}
+
 pub fn draw(seed: &[u8; 32], color_db: &ColorDb) {
-    let mut rng = Rng::from_seed(&seed[..]);
     let traits = Traits::from_seed(seed);
-    let _flow_field_spec = FlowFieldSpec::from_traits(&traits, &mut rng);
+    let mut rng = Rng::from_seed(&seed[..]);
+
+    let flow_field_spec = FlowFieldSpec::from_traits(&traits, &mut rng);
     let _spacing_spec = SpacingSpec::from_traits(&traits, &mut rng);
     let _color_change_odds = ColorChangeOdds::from_traits(&traits, &mut rng);
     let _scale_generator = ScaleGenerator::from_traits(&traits, &mut rng);
     let _bullseye_generator = BullseyeGenerator::from_traits(&traits, &mut rng);
     let _scheme = ColorScheme::from_traits(&traits, color_db, &mut rng);
+
+    let _flow_field = FlowField::build(&flow_field_spec, &traits, &mut rng);
+    let _ignore_flow_field = IgnoreFlowField::build(&mut rng);
 
     let named_colors = |seq: &[ColorKey]| -> Vec<&str> {
         seq.iter()
@@ -523,7 +733,7 @@ pub fn draw(seed: &[u8; 32], color_db: &ColorDb) {
             .collect::<Vec<_>>()
     };
 
-    println!("flow field spec: {:?}", _flow_field_spec);
+    println!("flow field spec: {:?}", flow_field_spec);
     println!("spacing spec: {:?}", _spacing_spec);
     println!("color change odds: {:?}", _color_change_odds);
     println!(
@@ -532,4 +742,13 @@ pub fn draw(seed: &[u8; 32], color_db: &ColorDb) {
     );
     println!("primary_seq: {:?}", named_colors(&_scheme.primary_seq));
     println!("secondary_seq: {:?}", named_colors(&_scheme.secondary_seq));
+
+    println!(
+        "flow field ({}x{}): top-left {:?}, bottom-right {:?}",
+        _flow_field.0.len(),
+        _flow_field.0[0].len(),
+        _flow_field.0.first().unwrap().first().unwrap(),
+        _flow_field.0.last().unwrap().last().unwrap()
+    );
+    println!("ignore flow field: {:?}", _ignore_flow_field);
 }

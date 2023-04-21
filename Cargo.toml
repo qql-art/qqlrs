@@ -14,6 +14,7 @@ name = "qql-cli"
 
 [dependencies]
 hex-literal = "0.3.4"
+raqote = "0.8.2"
 serde = { version = "1.0.160", features = ["derive"] }
 serde_json = "1.0.96"
 

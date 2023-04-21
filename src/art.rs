@@ -1,5 +1,7 @@
 use std::collections::HashSet;
 
+use raqote::{DrawOptions, DrawTarget, PathBuilder, SolidSource, Source, StrokeStyle};
+
 use super::color::{ColorDb, ColorKey, ColorSpec};
 use super::layouts::StartPointGroups;
 use super::math::{angle, cos, dist, modulo, pi, rescale, sin};
@@ -808,7 +810,7 @@ impl MarginChecker {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Point {
     pub position: (f64, f64),
     pub scale: f64,
@@ -819,6 +821,41 @@ pub struct Point {
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct Hsb(pub f64, pub f64, pub f64);
 pub struct Points(pub Vec<Point>);
+
+impl Hsb {
+    pub fn to_rgb(self) -> Rgb {
+        let h = self.0;
+        let s = self.1 / 100.0;
+        let v = self.2 / 100.0;
+        let chroma = s * v * 255.0;
+        let h = h / 60.0;
+        let secondary = chroma * (1.0 - (h % 2.0 - 1.0).abs());
+        let (r, g, b) = match () {
+            _ if h < 1.0 => (chroma, secondary, 0.0),
+            _ if h < 2.0 => (secondary, chroma, 0.0),
+            _ if h < 3.0 => (0.0, chroma, secondary),
+            _ if h < 4.0 => (0.0, secondary, chroma),
+            _ if h < 5.0 => (secondary, 0.0, chroma),
+            _ => (chroma, 0.0, secondary),
+        };
+        let m = v * 255.0 - chroma;
+        Rgb(r + m, g + m, b + m)
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct Rgb(pub f64, pub f64, pub f64);
+
+impl Rgb {
+    pub fn to_source(self) -> Source<'static> {
+        Source::Solid(SolidSource {
+            r: self.0 as u8,
+            g: self.1 as u8,
+            b: self.2 as u8,
+            a: 255,
+        })
+    }
+}
 
 impl Points {
     #[allow(clippy::too_many_arguments)]
@@ -1003,10 +1040,278 @@ fn perturb_color(color: Hsb, spec: &ColorSpec, rng: &mut Rng) -> Hsb {
     Hsb(hue, sat, bright)
 }
 
-pub fn draw(seed: &[u8; 32], color_db: &ColorDb) -> Points {
+fn paint(
+    canvas_width: i32,
+    traits: &Traits,
+    color_db: &ColorDb,
+    points: Points,
+    color_scheme: &ColorScheme,
+    colors_used: &mut HashSet<ColorKey>,
+    rng: &mut Rng,
+) -> DrawTarget {
+    let canvas_height = canvas_width * 5 / 4;
+    let mut dt = DrawTarget::new(canvas_width, canvas_height);
+    dt.fill_rect(
+        0.0,
+        0.0,
+        canvas_width as f32,
+        canvas_height as f32,
+        {
+            let spec = color_db
+                .color(color_scheme.background)
+                .expect("invalid background");
+            &Hsb(spec.hue, spec.sat, spec.bright).to_rgb().to_source()
+        },
+        &DrawOptions::new(),
+    );
+
+    let stack_offset = match traits.color_mode {
+        ColorMode::Stacked => Some((rng.gauss(0.0, w(0.0013)), rng.gauss(0.0, w(0.0013)).abs())),
+        _ => None,
+    };
+    let is_zebra = matches!(traits.color_mode, ColorMode::Zebra);
+
+    let mut splatter_points = Vec::new();
+
+    for mut p in points.0 {
+        let (x, y) = p.position;
+
+        // splatter is much more likely closer to the splatter center
+        let splatter_odds_adjustment = f64::powf(
+            rescale(
+                dist(p.position, color_scheme.splatter_center),
+                (0.0, w(1.4)),
+                (1.0, 0.0),
+            ),
+            2.5,
+        );
+        if rng.odds(color_scheme.splatter_odds * splatter_odds_adjustment) {
+            splatter_points.push(p.clone());
+        }
+        if let Some((xoff, yoff)) = stack_offset {
+            draw_ring_dot(
+                &Point {
+                    position: (x + xoff, y + yoff),
+                    primary_color: p.secondary_color,
+                    bullseye: Bullseye {
+                        density: p.bullseye.density * rng.gauss(0.99, 0.03),
+                        rings: p.bullseye.rings,
+                    },
+                    ..p
+                },
+                &mut dt,
+                rng,
+            );
+        }
+        if !is_zebra {
+            p.secondary_color = p.primary_color;
+        }
+        draw_ring_dot(&p, &mut dt, rng);
+    }
+
+    for mut p in splatter_points {
+        let splatter_color = *rng.choice(&color_scheme.splatter_choices);
+        let final_color = spec_to_color(
+            splatter_color,
+            color_db.color(splatter_color).expect("invalid color"),
+            colors_used,
+            rng,
+        );
+        p.primary_color = final_color;
+        p.secondary_color = final_color;
+        p.bullseye.density = f64::max(0.17, p.bullseye.density * 0.7);
+        draw_ring_dot(&p, &mut dt, rng);
+    }
+    dt
+}
+
+fn draw_ring_dot(pt: &Point, dt: &mut DrawTarget, rng: &mut Rng) {
+    let mut num_rings = pt.bullseye.rings;
+    // TODO(wchargin): Simplify under the assumption that `num_rings` starts as 1, 2, 3, or 7.
+    if pt.scale < rescale(pt.bullseye.density, (0.15, 1.0), (w(0.0039), w(0.001))) {
+        num_rings = num_rings.min(1);
+    } else if pt.scale < rescale(pt.bullseye.density, (0.15, 1.0), (w(0.0072), w(0.0029))) {
+        num_rings = num_rings.min(2);
+    } else if pt.scale < w(0.01) {
+        num_rings = num_rings.min(3);
+    } else if pt.scale < w(0.012) {
+        num_rings = num_rings.min(4);
+    } else if pt.scale < w(0.014) {
+        num_rings = num_rings.min(5);
+    } else if pt.scale < w(0.017) {
+        num_rings = num_rings.min(6);
+    } else if pt.scale < w(0.02) {
+        num_rings = num_rings.min(7);
+    } else if pt.scale < w(0.023) {
+        num_rings = num_rings.min(8);
+    }
+    let band_step = pt.scale / num_rings as f64;
+
+    // lower fill density results in higher thickness
+    let band_thickness = w(0.0004).max(band_step * (1.0 - pt.bullseye.density));
+
+    // when we have more rings, there is less room to shift them around
+    let variance_adjust = rescale(pt.bullseye.density, (0.1, 1.0), (0.5, 1.2));
+    let position_variance = if num_rings >= 7 {
+        variance_adjust * rescale(num_rings as f64, (7.0, 9.0), (0.008, 0.005))
+    } else {
+        variance_adjust * rescale(num_rings as f64, (1.0, 7.0), (0.022, 0.008))
+    };
+
+    let mut band_num = 0;
+    let mut r = pt.scale;
+    while r > w(0.0004) {
+        let color = if band_num % 2 == 0 {
+            pt.primary_color
+        } else {
+            pt.secondary_color
+        };
+        band_num += 1;
+
+        let band_center_x = rng.gauss(pt.position.0, w(0.0005).min(r * position_variance));
+        let band_center_y = rng.gauss(pt.position.1, w(0.0005).min(r * position_variance));
+
+        let thickness_variance = rescale(pt.bullseye.density, (0.1, 1.0), (0.01, 0.13));
+        let mut final_thickness = rng.gauss(band_thickness, band_thickness * thickness_variance);
+        if r < w(0.002) && num_rings == 1 {
+            final_thickness = rescale(pt.bullseye.density, (0.0, 1.0), (r, r * 0.25));
+        }
+
+        // avoid super fat, large "donuts"
+        if num_rings == 1 && pt.scale > w(0.02) {
+            final_thickness = rescale(final_thickness, (w(0.003), w(0.08)), (w(0.003), w(0.05)));
+            final_thickness = final_thickness
+                .min(rescale(pt.scale, (0.0, w(0.1)), (w(0.003), w(0.04))))
+                .min(w(0.04));
+        }
+
+        draw_messy_circle(
+            (band_center_x, band_center_y),
+            r,
+            final_thickness,
+            variance_adjust,
+            color,
+            dt,
+            rng,
+        );
+
+        r -= band_step;
+    }
+}
+
+fn draw_messy_circle(
+    (x, y): (f64, f64),
+    r: f64,
+    thickness: f64,
+    variance_adjust: f64,
+    color: Hsb,
+    dt: &mut DrawTarget,
+    rng: &mut Rng,
+) {
+    let source = color.to_rgb().to_source();
+
+    let num_rounds_divisor = if thickness > w(0.02) {
+        rescale(thickness, (w(0.02), w(0.04)), (w(0.00021), w(0.00022)))
+    } else if thickness > w(0.006) {
+        rescale(thickness, (w(0.006), w(0.02)), (w(0.00015), w(0.00021)))
+    } else if thickness > w(0.003) {
+        rescale(thickness, (w(0.003), w(0.006)), (w(0.00012), w(0.00015)))
+    } else {
+        rescale(thickness, (0.0, w(0.006)), (w(0.00016), w(0.00012)))
+    };
+    let num_rounds = f64::ceil((thickness / num_rounds_divisor).max(1.0)) as usize;
+
+    for i in 0..num_rounds {
+        let r = rescale(i as f64, (0.0, num_rounds as f64), (r, r - thickness));
+        let variance_ratio =
+            variance_adjust * rescale(thickness, (w(0.001), w(0.04)), (0.08, 0.03));
+        let mut position_variance = variance_adjust * w(0.0015).min(thickness * variance_ratio);
+        let mut thickness_variance_multiplier = 1.0;
+        if i < 5 {
+            position_variance *= 1.5;
+            thickness_variance_multiplier = 2.0;
+        }
+        let (x, y) = (
+            rng.gauss(x, position_variance),
+            rng.gauss(y, position_variance),
+        );
+
+        let mean_thickness = if thickness > w(0.02) {
+            rescale(thickness, (w(0.02), w(0.04)), (w(0.0007), w(0.00073)))
+        } else if thickness > w(0.006) {
+            rescale(thickness, (w(0.006), w(0.02)), (w(0.0005), w(0.0007)))
+        } else {
+            rescale(thickness, (w(0.001), w(0.006)), (w(0.0001), w(0.0005)))
+        };
+        let thickness_variance_factor =
+            thickness_variance_multiplier * rescale(thickness, (w(0.001), w(0.04)), (0.25, 1.1));
+        let mut single_line_variance = mean_thickness * thickness_variance_factor;
+        if r < w(0.002) {
+            single_line_variance = mean_thickness * 0.1;
+        }
+        let thickness = rng
+            .gauss(mean_thickness, single_line_variance)
+            .max(w(0.0002));
+        draw_clean_circle((x, y), r, thickness, 0.007, &source, dt, rng);
+    }
+}
+
+fn draw_clean_circle(
+    (x, y): (f64, f64),
+    r: f64,
+    thickness: f64,
+    eccentricity: f64,
+    source: &Source,
+    dt: &mut DrawTarget,
+    rng: &mut Rng,
+) {
+    let r = (r - thickness * 0.5).max(w(0.0002));
+    let stroke_weight = (thickness * 0.95 * dt.width() as f64 / VIRTUAL_W) as f32;
+
+    let variance = w(0.0015).min(r * eccentricity);
+    let rx = rng.gauss(r, variance);
+    let ry = rng.gauss(r, variance);
+
+    let num_steps = (r * pi(2.0) / w(0.0005)).max(8.0);
+    let step = pi(2.0) / num_steps;
+
+    let mut pb = PathBuilder::new();
+    let mut theta = 0.0;
+    while theta < pi(2.0) {
+        let wr = dt.width() as f32 / VIRTUAL_W as f32;
+        let x = (x + rx * theta.cos()) as f32 * wr;
+        let y = (y + ry * theta.sin()) as f32 * wr;
+        if theta == 0.0 {
+            pb.move_to(x, y);
+        } else {
+            pb.line_to(x, y);
+        }
+        theta += step;
+    }
+    pb.close();
+    let path = pb.finish();
+
+    dt.stroke(
+        &path,
+        source,
+        &StrokeStyle {
+            width: stroke_weight,
+            ..StrokeStyle::default()
+        },
+        &DrawOptions::new(),
+    );
+}
+
+pub struct Render {
+    pub dt: DrawTarget,
+    pub num_points: u64,
+    pub colors_used: HashSet<ColorKey>,
+}
+
+pub fn draw(seed: &[u8; 32], color_db: &ColorDb, canvas_width: i32) -> Render {
     let traits = Traits::from_seed(seed);
-    eprintln!("traits: {:#?}", traits);
     let mut rng = Rng::from_seed(&seed[..]);
+    eprintln!("initialized traits");
 
     let flow_field_spec = FlowFieldSpec::from_traits(&traits, &mut rng);
     let spacing_spec = SpacingSpec::from_traits(&traits, &mut rng);
@@ -1016,36 +1321,9 @@ pub fn draw(seed: &[u8; 32], color_db: &ColorDb) -> Points {
     let color_scheme = ColorScheme::from_traits(&traits, color_db, &mut rng);
 
     let flow_field = FlowField::build(&flow_field_spec, &traits, &mut rng);
+    eprintln!("built flow field");
     let ignore_flow_field = IgnoreFlowField::build(&flow_field_spec, &mut rng);
     let start_points = StartPointGroups::build(traits.structure, &mut rng);
-
-    eprintln!(
-        "flow field ({}x{}): top-left {:?}, bottom-right {:?}",
-        flow_field.0.len(),
-        flow_field.0[0].len(),
-        flow_field.0.first().unwrap().first().unwrap(),
-        flow_field.0.last().unwrap().last().unwrap()
-    );
-    eprintln!("ignore flow field: {:?}", ignore_flow_field);
-    eprintln!("start points groups (len={}):", start_points.0.len());
-    {
-        let g0 = start_points.0.first().unwrap();
-        eprintln!(
-            "    first group (len={}) = {:?} ... {:?}",
-            g0.len(),
-            g0.first().unwrap(),
-            g0.last().unwrap()
-        );
-    }
-    {
-        let glast = start_points.0.last().unwrap();
-        eprintln!(
-            "    last group  (len={}) = {:?} ... {:?}",
-            glast.len(),
-            glast.first().unwrap(),
-            glast.last().unwrap()
-        );
-    }
 
     let grouped_flow_lines =
         GroupedFlowLines::build(flow_field, ignore_flow_field, start_points, &mut rng);
@@ -1064,31 +1342,23 @@ pub fn draw(seed: &[u8; 32], color_db: &ColorDb) -> Points {
         &mut colors_used,
         &mut rng,
     );
-
-    let named_colors = |seq: &[ColorKey]| -> Vec<&str> {
-        seq.iter()
-            .map(|&i| color_db.color(i).unwrap().name.as_str())
-            .collect::<Vec<_>>()
-    };
-
-    eprintln!("flow field spec: {:?}", flow_field_spec);
-    eprintln!("spacing spec: {:?}", spacing_spec);
-    eprintln!("color change odds: {:?}", color_change_odds);
-    eprintln!(
-        "background: {:?}",
-        color_db.color(color_scheme.background).unwrap().name
+    eprintln!("laid out points");
+    let num_points = points.0.len() as u64;
+    let dt = paint(
+        canvas_width,
+        &traits,
+        color_db,
+        points,
+        &color_scheme,
+        &mut colors_used,
+        &mut rng,
     );
-    eprintln!("primary_seq: {:?}", named_colors(&color_scheme.primary_seq));
-    eprintln!(
-        "secondary_seq: {:?}",
-        named_colors(&color_scheme.secondary_seq)
-    );
-    eprintln!(
-        "colors used: {:?}",
-        named_colors(&colors_used.iter().copied().collect::<Vec<_>>())
-    );
-    eprintln!("num points: {:?}", points.0.len());
-    points
+    eprintln!("drew points");
+    Render {
+        dt,
+        num_points,
+        colors_used,
+    }
 }
 
 #[cfg(test)]

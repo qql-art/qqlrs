@@ -21,22 +21,9 @@ fn main() {
     };
 
     let color_db = qql::color::ColorDb::from_bundle();
-    let points = qql::art::draw(&seed, &color_db);
-    let mut stdout = std::io::stdout().lock();
-    let hsb_to_arr = |hsb: qql::art::Hsb| serde_json::json!([hsb.0, hsb.1, hsb.2, 100]);
-    for pt in points.0 {
-        let json = serde_json::json!({
-            "point": [pt.position.0, pt.position.1],
-            "scale": pt.scale,
-            "color": hsb_to_arr(pt.primary_color),
-            "secondaryColor": hsb_to_arr(pt.secondary_color),
-            "bullseyeSpec": {
-                "rings": pt.bullseye.rings,
-                "density": pt.bullseye.density,
-            },
-        });
-        serde_json::to_writer(&mut stdout, &json).unwrap();
-    }
+    let dt = qql::art::draw(&seed, &color_db, 2400).dt;
+    dt.write_png("qql.png").expect("dt.write_png");
+    eprintln!("wrote png");
 }
 
 // copied from Sven Marnach: <https://stackoverflow.com/a/52992629>

@@ -1003,9 +1003,9 @@ fn perturb_color(color: Hsb, spec: &ColorSpec, rng: &mut Rng) -> Hsb {
     Hsb(hue, sat, bright)
 }
 
-pub fn draw(seed: &[u8; 32], color_db: &ColorDb) {
+pub fn draw(seed: &[u8; 32], color_db: &ColorDb) -> Points {
     let traits = Traits::from_seed(seed);
-    println!("traits: {:#?}", traits);
+    eprintln!("traits: {:#?}", traits);
     let mut rng = Rng::from_seed(&seed[..]);
 
     let flow_field_spec = FlowFieldSpec::from_traits(&traits, &mut rng);
@@ -1019,18 +1019,18 @@ pub fn draw(seed: &[u8; 32], color_db: &ColorDb) {
     let ignore_flow_field = IgnoreFlowField::build(&flow_field_spec, &mut rng);
     let start_points = StartPointGroups::build(traits.structure, &mut rng);
 
-    println!(
+    eprintln!(
         "flow field ({}x{}): top-left {:?}, bottom-right {:?}",
         flow_field.0.len(),
         flow_field.0[0].len(),
         flow_field.0.first().unwrap().first().unwrap(),
         flow_field.0.last().unwrap().last().unwrap()
     );
-    println!("ignore flow field: {:?}", ignore_flow_field);
-    println!("start points groups (len={}):", start_points.0.len());
+    eprintln!("ignore flow field: {:?}", ignore_flow_field);
+    eprintln!("start points groups (len={}):", start_points.0.len());
     {
         let g0 = start_points.0.first().unwrap();
-        println!(
+        eprintln!(
             "    first group (len={}) = {:?} ... {:?}",
             g0.len(),
             g0.first().unwrap(),
@@ -1039,7 +1039,7 @@ pub fn draw(seed: &[u8; 32], color_db: &ColorDb) {
     }
     {
         let glast = start_points.0.last().unwrap();
-        println!(
+        eprintln!(
             "    last group  (len={}) = {:?} ... {:?}",
             glast.len(),
             glast.first().unwrap(),
@@ -1071,23 +1071,24 @@ pub fn draw(seed: &[u8; 32], color_db: &ColorDb) {
             .collect::<Vec<_>>()
     };
 
-    println!("flow field spec: {:?}", flow_field_spec);
-    println!("spacing spec: {:?}", spacing_spec);
-    println!("color change odds: {:?}", color_change_odds);
-    println!(
+    eprintln!("flow field spec: {:?}", flow_field_spec);
+    eprintln!("spacing spec: {:?}", spacing_spec);
+    eprintln!("color change odds: {:?}", color_change_odds);
+    eprintln!(
         "background: {:?}",
         color_db.color(color_scheme.background).unwrap().name
     );
-    println!("primary_seq: {:?}", named_colors(&color_scheme.primary_seq));
-    println!(
+    eprintln!("primary_seq: {:?}", named_colors(&color_scheme.primary_seq));
+    eprintln!(
         "secondary_seq: {:?}",
         named_colors(&color_scheme.secondary_seq)
     );
-    println!(
+    eprintln!(
         "colors used: {:?}",
         named_colors(&colors_used.iter().copied().collect::<Vec<_>>())
     );
-    println!("num points: {:?}", points.0.len());
+    eprintln!("num points: {:?}", points.0.len());
+    points
 }
 
 #[cfg(test)]

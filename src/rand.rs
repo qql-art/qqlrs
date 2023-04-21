@@ -63,6 +63,29 @@ impl Rng {
 
     /// Picks a random value according to a Gaussian (normal) distribution with the given mean and
     /// standard deviation.
+    ///
+    /// # Implementation-defined approximation behavior
+    ///
+    /// The canonical QQL JavaScript algorithm uses `Math.sqrt` and `Math.log` here, which both
+    /// have implementation-defined approximation behavior per ECMA-262. The values returned by
+    /// [`f64::ln`] may differ slightly, and testing on my machine shows that the results do differ
+    /// for about 7% of values selected uniformly at random by `Math.random()`.
+    ///
+    /// Therefore, the results of this `gauss` method may also differ slightly across the two
+    /// implementations. For example:
+    ///
+    /// ```rust
+    /// use qql::rand::Rng;
+    /// let mut rng = Rng::from_seed(b"\x08");
+    /// assert_eq!(rng.gauss(0.0, 1.0), 1.0637608855800318);
+    /// ```
+    ///
+    /// ```javascript
+    /// > import("./src/art/safe-random.js").then((r) => console.log(r.makeSeededRng("0x08").gauss()))
+    /// 1.063760885580032
+    /// ```
+    ///
+    /// Here, the two normal deviates differ by one unit in the last place.
     pub fn gauss(&mut self, mean: f64, stdev: f64) -> f64 {
         if let Some(z) = self.next_gaussian.take() {
             return mean + stdev * z;

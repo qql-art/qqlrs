@@ -22,31 +22,6 @@ const SPC: f64 = 5.0; // spacing of points in the field, on each axis
 const FLOW_FIELD_ROWS: usize = 700;
 const FLOW_FIELD_COLS: usize = 560;
 
-/// Tests that the hard-coded values for [`SPC`], [`FLOW_FIELD_ROWS`], and [`FLOW_FIELD_COLS`]
-/// match the computed values used (either implicitly or explicitly) in the JavaScript algorithm.
-/// These are hard-coded because we can't use [`f64::floor`] and friends in a const context.
-#[cfg(test)]
-#[test]
-fn test_flow_field_dimensions() {
-    assert_eq!(SPC, (VIRTUAL_W * 0.0025).floor());
-
-    let mut x = LX;
-    let mut cols = 0;
-    while x < RX {
-        cols += 1;
-        x += SPC;
-    }
-    assert_eq!(cols, FLOW_FIELD_COLS);
-
-    let mut y = TY;
-    let mut cols = 0;
-    while y < BY {
-        cols += 1;
-        y += SPC;
-    }
-    assert_eq!(cols, FLOW_FIELD_ROWS);
-}
-
 pub(crate) fn w(v: f64) -> f64 {
     VIRTUAL_W * v
 }
@@ -841,7 +816,7 @@ pub struct Point {
     pub secondary_color: Hsb,
     pub bullseye: Bullseye,
 }
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub struct Hsb(pub f64, pub f64, pub f64);
 pub struct Points(pub Vec<Point>);
 
@@ -1123,4 +1098,61 @@ pub fn draw(seed: &[u8; 32], color_db: &ColorDb) {
         named_colors(&colors_used.iter().copied().collect::<Vec<_>>())
     );
     println!("num points: {:?}", points.0.len());
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    /// Tests that the hard-coded values for [`SPC`], [`FLOW_FIELD_ROWS`], and [`FLOW_FIELD_COLS`]
+    /// match the computed values used (either implicitly or explicitly) in the JavaScript algorithm.
+    /// These are hard-coded because we can't use [`f64::floor`] and friends in a const context.
+    #[test]
+    fn test_flow_field_dimensions() {
+        assert_eq!(SPC, (VIRTUAL_W * 0.0025).floor());
+
+        let mut x = LX;
+        let mut cols = 0;
+        while x < RX {
+            cols += 1;
+            x += SPC;
+        }
+        assert_eq!(cols, FLOW_FIELD_COLS);
+
+        let mut y = TY;
+        let mut cols = 0;
+        while y < BY {
+            cols += 1;
+            y += SPC;
+        }
+        assert_eq!(cols, FLOW_FIELD_ROWS);
+    }
+
+    #[test]
+    fn test_spec_to_color() {
+        let key: ColorKey = 123;
+        let spec = ColorSpec {
+            name: "Austin Blue".to_string(),
+            hue: 205.0,
+            hue_min: 203.0,
+            hue_max: 207.0,
+            hue_variance: 1.0,
+            sat: 85.0,
+            sat_min: 83.0,
+            sat_max: 87.0,
+            sat_variance: 1.0,
+            bright: 70.0,
+            bright_min: 68.0,
+            bright_max: 72.0,
+            bright_variance: 1.0,
+        };
+        let mut colors_used: HashSet<ColorKey> = HashSet::new();
+        let mut rng = Rng::from_seed(&[]);
+
+        let color = spec_to_color(key, &spec, &mut colors_used, &mut rng);
+        let expected = Hsb(206.1738113319151, 84.77782201272913, 70.8832072948715);
+
+        assert_eq!(colors_used, HashSet::from([key]));
+        assert_eq!(color, expected);
+    }
 }

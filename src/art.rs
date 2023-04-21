@@ -984,18 +984,8 @@ fn spec_to_color(
     rng: &mut Rng,
 ) -> Hsb {
     colors_used.insert(key);
-    let hue = modulo(
-        rng.gauss(spec.hue, spec.hue_variance)
-            .clamp(spec.hue_min, spec.hue_max),
-        360.0,
-    );
-    let sat = rng
-        .gauss(spec.sat, spec.sat_variance)
-        .clamp(spec.sat_min, spec.sat_max);
-    let bright = rng
-        .gauss(spec.bright, spec.bright_variance)
-        .clamp(spec.bright_min, spec.bright_max);
-    Hsb(hue, sat, bright)
+    let base = Hsb(spec.hue, spec.sat, spec.bright);
+    perturb_color(base, spec, rng)
 }
 
 fn perturb_color(color: Hsb, spec: &ColorSpec, rng: &mut Rng) -> Hsb {

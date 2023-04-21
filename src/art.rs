@@ -1010,31 +1010,31 @@ fn spec_to_color(
 ) -> Hsb {
     colors_used.insert(key);
     let hue = modulo(
-        rng.gauss(spec.hue.into(), spec.hue_variance)
-            .clamp(spec.hue_min.into(), spec.hue_max.into()),
+        rng.gauss(spec.hue, spec.hue_variance)
+            .clamp(spec.hue_min, spec.hue_max),
         360.0,
     );
     let sat = rng
-        .gauss(spec.sat.into(), spec.sat_variance)
-        .clamp(spec.sat_min.into(), spec.sat_max.into());
+        .gauss(spec.sat, spec.sat_variance)
+        .clamp(spec.sat_min, spec.sat_max);
     let bright = rng
-        .gauss(spec.bright.into(), spec.bright_variance)
-        .clamp(spec.bright_min.into(), spec.bright_max.into());
+        .gauss(spec.bright, spec.bright_variance)
+        .clamp(spec.bright_min, spec.bright_max);
     Hsb(hue, sat, bright)
 }
 
 fn perturb_color(color: Hsb, spec: &ColorSpec, rng: &mut Rng) -> Hsb {
     let hue = modulo(
         rng.gauss(color.0, spec.hue_variance)
-            .clamp(spec.hue_min.into(), spec.hue_max.into()),
+            .clamp(spec.hue_min, spec.hue_max),
         360.0,
     );
     let sat = rng
         .gauss(color.1, spec.sat_variance)
-        .clamp(spec.sat_min.into(), spec.sat_max.into());
+        .clamp(spec.sat_min, spec.sat_max);
     let bright = rng
         .gauss(color.2, spec.bright_variance)
-        .clamp(spec.bright_min.into(), spec.bright_max.into());
+        .clamp(spec.bright_min, spec.bright_max);
     Hsb(hue, sat, bright)
 }
 

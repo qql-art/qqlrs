@@ -1,6 +1,8 @@
-use super::color::{ColorDb, ColorKey};
+use std::collections::HashSet;
+
+use super::color::{ColorDb, ColorKey, ColorSpec};
 use super::layouts::StartPointGroups;
-use super::math::{angle, cos, dist, modulo, pi, rescale, sin};
+use super::math::{angle, cos, dist, dist_lower_bound, dist_upper_bound, modulo, pi, rescale, sin};
 use super::rand::Rng;
 use super::sectors::Sectors;
 use super::traits::*;
@@ -787,6 +789,12 @@ impl GroupedFlowLines {
     }
 }
 
+#[derive(Debug, Copy, Clone)]
+pub struct Collider {
+    pub position: (f64, f64),
+    pub radius: f64,
+}
+
 fn build_sectors<T>() -> Sectors<T> {
     const CHECK_MARGIN: f64 = 0.05;
     const CHECK_LEFT: f64 = -VIRTUAL_W * CHECK_MARGIN;
@@ -796,17 +804,283 @@ fn build_sectors<T>() -> Sectors<T> {
     Sectors::new(CHECK_LEFT, CHECK_RIGHT, CHECK_TOP, CHECK_BOTTOM)
 }
 
+#[derive(Debug)]
+pub struct CollisionChecker {
+    margin: f64,
+    bottom_margin: f64,
+}
+impl CollisionChecker {
+    pub fn from_traits(traits: &Traits) -> Self {
+        match traits.margin {
+            Margin::None => Self {
+                margin: w(-0.05),
+                bottom_margin: w(-0.05),
+            },
+            Margin::Crisp => Self {
+                margin: w(0.003),
+                bottom_margin: w(0.003),
+            },
+            Margin::Wide => Self {
+                margin: w(0.07),
+                bottom_margin: w(0.08),
+            },
+        }
+    }
+
+    pub fn is_point_good(
+        &self,
+        (x, y): (f64, f64),
+        spacing: f64,
+        sectors: &mut Sectors<Collider>,
+    ) -> bool {
+        let Self {
+            margin,
+            bottom_margin,
+        } = *self;
+        if x - spacing < margin
+            || x + spacing >= VIRTUAL_W - margin
+            || y - spacing < margin
+            || y + spacing > VIRTUAL_H - bottom_margin
+        {
+            return false;
+        }
+        for sector in sectors.affected((x, y), spacing) {
+            for other in sector {
+                if Self::collides((x, y), other.position, spacing + other.radius) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    fn collides(p1: (f64, f64), p2: (f64, f64), spacing: f64) -> bool {
+        if dist_lower_bound(p1, p2) > spacing {
+            return false;
+        }
+        if dist_upper_bound(p1, p2) <= spacing {
+            return true;
+        }
+        dist(p1, p2) <= spacing
+    }
+}
+
+#[derive(Debug)]
+pub struct Point {
+    pub position: (f64, f64),
+    pub scale: f64,
+    pub primary_color: Hsb,
+    pub secondary_color: Hsb,
+    pub bullseye: Bullseye,
+}
+#[derive(Debug, Copy, Clone)]
+pub struct Hsb(pub f64, pub f64, pub f64);
+pub struct Points(pub Vec<Point>);
+
+impl Points {
+    #[allow(clippy::too_many_arguments)]
+    pub fn build(
+        traits: &Traits,
+        color_db: &ColorDb,
+        grouped_flow_lines: GroupedFlowLines,
+        color_scheme: &ColorScheme,
+        color_change_odds: &ColorChangeOdds,
+        spacing_spec: &SpacingSpec,
+        bullseye_generator: &mut BullseyeGenerator,
+        scale_generator: &mut ScaleGenerator,
+        sectors: &mut Sectors<Collider>,
+        colors_used: &mut HashSet<ColorKey>,
+        rng: &mut Rng,
+    ) -> Points {
+        fn random_idx(len: usize, rng: &mut Rng) -> usize {
+            rng.uniform(0.0, len as f64) as usize
+        }
+        let mut primary_color_idx = random_idx(color_scheme.primary_seq.len(), rng);
+        let mut secondary_color_idx = random_idx(color_scheme.secondary_seq.len(), rng);
+        let mut base_bullseye_spec = bullseye_generator.next(rng);
+
+        let collision_checker = CollisionChecker::from_traits(traits);
+
+        let mut all_points = Vec::new();
+        for group in grouped_flow_lines.0 {
+            if rng.odds(color_change_odds.group) {
+                primary_color_idx =
+                    pick_next_color(&color_scheme.primary_seq, primary_color_idx, rng);
+                secondary_color_idx =
+                    pick_next_color(&color_scheme.secondary_seq, secondary_color_idx, rng);
+                base_bullseye_spec = bullseye_generator.next(rng);
+            }
+            Self::build_group(
+                &mut all_points,
+                color_db,
+                group,
+                color_scheme,
+                primary_color_idx,
+                secondary_color_idx,
+                color_change_odds,
+                spacing_spec,
+                bullseye_generator,
+                base_bullseye_spec,
+                scale_generator,
+                sectors,
+                &collision_checker,
+                colors_used,
+                rng,
+            );
+        }
+        Points(all_points)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_group(
+        dest: &mut Vec<Point>,
+        color_db: &ColorDb,
+        group: FlowLineGroup,
+        color_scheme: &ColorScheme,
+        mut primary_color_idx: usize,
+        mut secondary_color_idx: usize,
+        color_change_odds: &ColorChangeOdds,
+        spacing_spec: &SpacingSpec,
+        bullseye_generator: &mut BullseyeGenerator,
+        mut bullseye: Bullseye,
+        scale_generator: &mut ScaleGenerator,
+        sectors: &mut Sectors<Collider>,
+        collision_checker: &CollisionChecker,
+        colors_used: &mut HashSet<ColorKey>,
+        rng: &mut Rng,
+    ) {
+        if rng.odds(color_change_odds.line) {
+            scale_generator.change(rng);
+        }
+        let scale = scale_generator.next(rng);
+
+        let mut primary_color_spec = color_db
+            .color(color_scheme.primary_seq[primary_color_idx])
+            .expect("invalid color");
+        let mut primary_color = spec_to_color(
+            color_scheme.primary_seq[primary_color_idx],
+            primary_color_spec,
+            colors_used,
+            rng,
+        );
+
+        let mut secondary_color_spec = color_db
+            .color(color_scheme.secondary_seq[secondary_color_idx])
+            .expect("invalid color");
+        let mut secondary_color = spec_to_color(
+            color_scheme.secondary_seq[secondary_color_idx],
+            secondary_color_spec,
+            colors_used,
+            rng,
+        );
+
+        for flow_line in group {
+            for (x, y) in flow_line {
+                let mut multiplier = spacing_spec.multiplier;
+                if scale > w(0.015) {
+                    multiplier = multiplier.max(1.02);
+                }
+                let spacing_radius =
+                    f64::max(scale * multiplier + spacing_spec.constant, scale * 0.75);
+                if !collision_checker.is_point_good((x, y), spacing_radius, sectors) {
+                    continue;
+                }
+                for sector in sectors.affected((x, y), spacing_radius) {
+                    sector.push(Collider {
+                        position: (x, y),
+                        radius: spacing_radius,
+                    });
+                }
+                primary_color = perturb_color(primary_color, primary_color_spec, rng);
+                secondary_color = perturb_color(secondary_color, secondary_color_spec, rng);
+                dest.push(Point {
+                    position: (x, y),
+                    scale,
+                    primary_color,
+                    secondary_color,
+                    bullseye,
+                })
+            }
+
+            // For the next line/dot-sequence, potentially change the color and scale
+            scale_generator.change(rng); // NOTE: This doesn't update `scale` (?).
+            if rng.odds(color_change_odds.line) {
+                primary_color_idx =
+                    pick_next_color(&color_scheme.primary_seq, primary_color_idx, rng);
+                primary_color_spec = color_db
+                    .color(color_scheme.primary_seq[primary_color_idx])
+                    .expect("invalid color");
+                bullseye = bullseye_generator.next(rng);
+            }
+            if rng.odds(color_change_odds.line) {
+                secondary_color_idx =
+                    pick_next_color(&color_scheme.secondary_seq, secondary_color_idx, rng);
+                secondary_color_spec = color_db
+                    .color(color_scheme.secondary_seq[secondary_color_idx])
+                    .expect("invalid color");
+            }
+        }
+    }
+}
+
+fn pick_next_color(seq: &[ColorKey], current_idx: usize, rng: &mut Rng) -> usize {
+    // We pick the next color by taking a step forward or backward in
+    // the color sequence from our current position. (And less often,
+    // we take multiple steps.)
+    let mut step: isize = *rng.wc(&[(1, 0.64), (2, 0.24), (3, 0.1), (4, 0.02)]);
+    if rng.odds(0.5) {
+        step *= -1;
+    }
+    (current_idx as isize + step).rem_euclid(seq.len() as isize) as usize
+}
+
+fn spec_to_color(
+    key: ColorKey,
+    spec: &ColorSpec,
+    colors_used: &mut HashSet<ColorKey>,
+    rng: &mut Rng,
+) -> Hsb {
+    colors_used.insert(key);
+    let hue = modulo(
+        rng.gauss(spec.hue.into(), spec.hue_variance)
+            .clamp(spec.hue_min.into(), spec.hue_max.into()),
+        360.0,
+    );
+    let sat = rng
+        .gauss(spec.sat.into(), spec.sat_variance)
+        .clamp(spec.sat_min.into(), spec.sat_max.into());
+    let bright = rng
+        .gauss(spec.bright.into(), spec.bright_variance)
+        .clamp(spec.bright_min.into(), spec.bright_max.into());
+    Hsb(hue, sat, bright)
+}
+
+fn perturb_color(color: Hsb, spec: &ColorSpec, rng: &mut Rng) -> Hsb {
+    let hue = modulo(
+        rng.gauss(color.0, spec.hue_variance)
+            .clamp(spec.hue_min.into(), spec.hue_max.into()),
+        360.0,
+    );
+    let sat = rng
+        .gauss(color.1, spec.sat_variance)
+        .clamp(spec.sat_min.into(), spec.sat_max.into());
+    let bright = rng
+        .gauss(color.2, spec.bright_variance)
+        .clamp(spec.bright_min.into(), spec.bright_max.into());
+    Hsb(hue, sat, bright)
+}
+
 pub fn draw(seed: &[u8; 32], color_db: &ColorDb) {
     let traits = Traits::from_seed(seed);
     println!("traits: {:#?}", traits);
     let mut rng = Rng::from_seed(&seed[..]);
 
     let flow_field_spec = FlowFieldSpec::from_traits(&traits, &mut rng);
-    let _spacing_spec = SpacingSpec::from_traits(&traits, &mut rng);
-    let _color_change_odds = ColorChangeOdds::from_traits(&traits, &mut rng);
-    let _scale_generator = ScaleGenerator::from_traits(&traits, &mut rng);
-    let _bullseye_generator = BullseyeGenerator::from_traits(&traits, &mut rng);
-    let _scheme = ColorScheme::from_traits(&traits, color_db, &mut rng);
+    let spacing_spec = SpacingSpec::from_traits(&traits, &mut rng);
+    let color_change_odds = ColorChangeOdds::from_traits(&traits, &mut rng);
+    let mut scale_generator = ScaleGenerator::from_traits(&traits, &mut rng);
+    let mut bullseye_generator = BullseyeGenerator::from_traits(&traits, &mut rng);
+    let color_scheme = ColorScheme::from_traits(&traits, color_db, &mut rng);
 
     let flow_field = FlowField::build(&flow_field_spec, &traits, &mut rng);
     let ignore_flow_field = IgnoreFlowField::build(&flow_field_spec, &mut rng);
@@ -840,10 +1114,23 @@ pub fn draw(seed: &[u8; 32], color_db: &ColorDb) {
         );
     }
 
-    let _grouped_flow_lines =
+    let grouped_flow_lines =
         GroupedFlowLines::build(flow_field, ignore_flow_field, start_points, &mut rng);
-
-    let _sectors: Sectors<(f64, f64, f64)> = build_sectors();
+    let mut sectors: Sectors<Collider> = build_sectors();
+    let mut colors_used: HashSet<ColorKey> = HashSet::new();
+    let points = Points::build(
+        &traits,
+        color_db,
+        grouped_flow_lines,
+        &color_scheme,
+        &color_change_odds,
+        &spacing_spec,
+        &mut bullseye_generator,
+        &mut scale_generator,
+        &mut sectors,
+        &mut colors_used,
+        &mut rng,
+    );
 
     let named_colors = |seq: &[ColorKey]| -> Vec<&str> {
         seq.iter()
@@ -852,12 +1139,20 @@ pub fn draw(seed: &[u8; 32], color_db: &ColorDb) {
     };
 
     println!("flow field spec: {:?}", flow_field_spec);
-    println!("spacing spec: {:?}", _spacing_spec);
-    println!("color change odds: {:?}", _color_change_odds);
+    println!("spacing spec: {:?}", spacing_spec);
+    println!("color change odds: {:?}", color_change_odds);
     println!(
         "background: {:?}",
-        color_db.color(_scheme.background).unwrap().name
+        color_db.color(color_scheme.background).unwrap().name
     );
-    println!("primary_seq: {:?}", named_colors(&_scheme.primary_seq));
-    println!("secondary_seq: {:?}", named_colors(&_scheme.secondary_seq));
+    println!("primary_seq: {:?}", named_colors(&color_scheme.primary_seq));
+    println!(
+        "secondary_seq: {:?}",
+        named_colors(&color_scheme.secondary_seq)
+    );
+    println!(
+        "colors used: {:?}",
+        named_colors(&colors_used.iter().copied().collect::<Vec<_>>())
+    );
+    println!("num points: {:?}", points.0.len());
 }

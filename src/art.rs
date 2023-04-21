@@ -2,9 +2,9 @@ use std::collections::HashSet;
 
 use super::color::{ColorDb, ColorKey, ColorSpec};
 use super::layouts::StartPointGroups;
-use super::math::{angle, cos, dist, dist_lower_bound, dist_upper_bound, modulo, pi, rescale, sin};
+use super::math::{angle, cos, dist, modulo, pi, rescale, sin};
 use super::rand::Rng;
-use super::sectors::Sectors;
+use super::sectors::{Collider, Sectors};
 use super::traits::*;
 
 // Use a constant width and height for all of our calculations to avoid
@@ -789,13 +789,7 @@ impl GroupedFlowLines {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
-pub struct Collider {
-    pub position: (f64, f64),
-    pub radius: f64,
-}
-
-fn build_sectors<T>() -> Sectors<T> {
+fn build_sectors() -> Sectors {
     const CHECK_MARGIN: f64 = 0.05;
     const CHECK_LEFT: f64 = -VIRTUAL_W * CHECK_MARGIN;
     const CHECK_RIGHT: f64 = VIRTUAL_W + VIRTUAL_W * CHECK_MARGIN;
@@ -805,11 +799,11 @@ fn build_sectors<T>() -> Sectors<T> {
 }
 
 #[derive(Debug)]
-pub struct CollisionChecker {
+pub struct MarginChecker {
     margin: f64,
     bottom_margin: f64,
 }
-impl CollisionChecker {
+impl MarginChecker {
     pub fn from_traits(traits: &Traits) -> Self {
         match traits.margin {
             Margin::None => Self {
@@ -827,41 +821,15 @@ impl CollisionChecker {
         }
     }
 
-    pub fn is_point_good(
-        &self,
-        (x, y): (f64, f64),
-        spacing: f64,
-        sectors: &mut Sectors<Collider>,
-    ) -> bool {
+    pub fn in_bounds(&self, (x, y): (f64, f64), spacing: f64) -> bool {
         let Self {
             margin,
             bottom_margin,
         } = *self;
-        if x - spacing < margin
+        !(x - spacing < margin
             || x + spacing >= VIRTUAL_W - margin
             || y - spacing < margin
-            || y + spacing > VIRTUAL_H - bottom_margin
-        {
-            return false;
-        }
-        for sector in sectors.affected((x, y), spacing) {
-            for other in sector {
-                if Self::collides((x, y), other.position, spacing + other.radius) {
-                    return false;
-                }
-            }
-        }
-        true
-    }
-
-    fn collides(p1: (f64, f64), p2: (f64, f64), spacing: f64) -> bool {
-        if dist_lower_bound(p1, p2) > spacing {
-            return false;
-        }
-        if dist_upper_bound(p1, p2) <= spacing {
-            return true;
-        }
-        dist(p1, p2) <= spacing
+            || y + spacing > VIRTUAL_H - bottom_margin)
     }
 }
 
@@ -888,7 +856,7 @@ impl Points {
         spacing_spec: &SpacingSpec,
         bullseye_generator: &mut BullseyeGenerator,
         scale_generator: &mut ScaleGenerator,
-        sectors: &mut Sectors<Collider>,
+        sectors: &mut Sectors,
         colors_used: &mut HashSet<ColorKey>,
         rng: &mut Rng,
     ) -> Points {
@@ -899,7 +867,7 @@ impl Points {
         let mut secondary_color_idx = random_idx(color_scheme.secondary_seq.len(), rng);
         let mut base_bullseye_spec = bullseye_generator.next(rng);
 
-        let collision_checker = CollisionChecker::from_traits(traits);
+        let margin_checker = MarginChecker::from_traits(traits);
 
         let mut all_points = Vec::new();
         for group in grouped_flow_lines.0 {
@@ -923,7 +891,7 @@ impl Points {
                 base_bullseye_spec,
                 scale_generator,
                 sectors,
-                &collision_checker,
+                &margin_checker,
                 colors_used,
                 rng,
             );
@@ -944,8 +912,8 @@ impl Points {
         bullseye_generator: &mut BullseyeGenerator,
         mut bullseye: Bullseye,
         scale_generator: &mut ScaleGenerator,
-        sectors: &mut Sectors<Collider>,
-        collision_checker: &CollisionChecker,
+        sectors: &mut Sectors,
+        margin_checker: &MarginChecker,
         colors_used: &mut HashSet<ColorKey>,
         rng: &mut Rng,
     ) {
@@ -982,14 +950,14 @@ impl Points {
                 }
                 let spacing_radius =
                     f64::max(scale * multiplier + spacing_spec.constant, scale * 0.75);
-                if !collision_checker.is_point_good((x, y), spacing_radius, sectors) {
+                if !margin_checker.in_bounds((x, y), spacing_radius) {
                     continue;
                 }
-                for sector in sectors.affected((x, y), spacing_radius) {
-                    sector.push(Collider {
-                        position: (x, y),
-                        radius: spacing_radius,
-                    });
+                if !sectors.test_and_add(Collider {
+                    position: (x, y),
+                    radius: spacing_radius,
+                }) {
+                    continue;
                 }
                 primary_color = perturb_color(primary_color, primary_color_spec, rng);
                 secondary_color = perturb_color(secondary_color, secondary_color_spec, rng);
@@ -1116,7 +1084,7 @@ pub fn draw(seed: &[u8; 32], color_db: &ColorDb) {
 
     let grouped_flow_lines =
         GroupedFlowLines::build(flow_field, ignore_flow_field, start_points, &mut rng);
-    let mut sectors: Sectors<Collider> = build_sectors();
+    let mut sectors: Sectors = build_sectors();
     let mut colors_used: HashSet<ColorKey> = HashSet::new();
     let points = Points::build(
         &traits,

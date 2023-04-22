@@ -12,6 +12,9 @@ name = "qql"
 [[bin]]
 name = "qql-cli"
 
+[profile.release]
+debug = true
+
 [dependencies]
 hex-literal = "0.3.4"
 raqote = "0.8.2"

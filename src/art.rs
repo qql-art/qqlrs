@@ -1272,6 +1272,9 @@ fn draw_clean_circle(
     let rx = rng.gauss(r, variance);
     let ry = rng.gauss(r, variance);
 
+    // The JavaScript algorithm computes an unused `startingTheta = rng.uniform(0.0, pi(2.0))`.
+    // We don't need to compute that, but we need to burn a uniform deviate to keep RNG synced.
+    rng.rnd();
     let num_steps = (r * pi(2.0) / w(0.0005)).max(8.0);
     let step = pi(2.0) / num_steps;
 

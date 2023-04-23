@@ -47,7 +47,15 @@ fn main() {
 
     let color_db = qql::color::ColorDb::from_bundle();
     let dt = qql::art::draw(opts.seed.as_bytes(), &color_db, &opts.config, 2400).dt;
-    let filename = format!("{}.png", &opts.seed);
+    let filename = format!(
+        "{}{}.png",
+        &opts.seed,
+        if opts.config.inflate_draw_radius {
+            "-inflated"
+        } else {
+            "-canon"
+        }
+    );
     dt.write_png(&filename).expect("dt.write_png");
     eprintln!("wrote png: {}", filename);
 }

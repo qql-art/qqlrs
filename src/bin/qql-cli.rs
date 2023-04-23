@@ -6,6 +6,8 @@ use clap::Parser;
 #[derive(Parser)]
 struct Opts {
     seed: Seed,
+    #[clap(flatten)]
+    config: qql::config::Config,
 }
 
 #[derive(Copy, Clone)]
@@ -44,7 +46,7 @@ fn main() {
     let opts = Opts::parse();
 
     let color_db = qql::color::ColorDb::from_bundle();
-    let dt = qql::art::draw(opts.seed.as_bytes(), &color_db, 2400).dt;
+    let dt = qql::art::draw(opts.seed.as_bytes(), &color_db, &opts.config, 2400).dt;
     let filename = format!("{}.png", &opts.seed);
     dt.write_png(&filename).expect("dt.write_png");
     eprintln!("wrote png: {}", filename);

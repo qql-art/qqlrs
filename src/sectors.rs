@@ -1,4 +1,7 @@
-use crate::math::{dist, dist_lower_bound, dist_upper_bound};
+use crate::{
+    config::Config,
+    math::{dist, dist_lower_bound, dist_upper_bound},
+};
 
 const NUM_SECTORS: usize = 50;
 
@@ -20,6 +23,7 @@ impl Indexer {
 }
 
 pub struct Sectors {
+    fast_collisions: bool,
     ix: Indexer,
     iy: Indexer,
     sectors: Box<[[Vec<Collider>; NUM_SECTORS]; NUM_SECTORS]>,
@@ -32,19 +36,25 @@ pub struct Collider {
 }
 
 impl Sectors {
-    pub fn new(left: f64, right: f64, top: f64, bottom: f64) -> Self {
+    pub fn new(config: &Config, left: f64, right: f64, top: f64, bottom: f64) -> Self {
         let ix = Indexer::new(f64::min(left, right), f64::max(left, right));
         let iy = Indexer::new(f64::min(top, bottom), f64::max(top, bottom));
         let sectors = Box::new(std::array::from_fn(|_| std::array::from_fn(|_| Vec::new())));
-        Sectors { ix, iy, sectors }
+        Sectors {
+            fast_collisions: config.fast_collisions,
+            ix,
+            iy,
+            sectors,
+        }
     }
 
     /// Tests whether the given collider can be included in this sector grid without any
     /// collisions, and adds it if it can. Returns whether the collider was added.
     pub fn test_and_add(&mut self, collider: Collider) -> bool {
+        let fast_collisions = self.fast_collisions;
         for sector in self.affected(&collider) {
             for other in sector {
-                if collides(&collider, other) {
+                if collides(fast_collisions, &collider, other) {
                     return false;
                 }
             }
@@ -69,7 +79,27 @@ impl Sectors {
     }
 }
 
-fn collides(c1: &Collider, c2: &Collider) -> bool {
+fn collides(fast_collisions: bool, c1: &Collider, c2: &Collider) -> bool {
+    if fast_collisions {
+        collides_fast(c1, c2)
+    } else {
+        collides_dist(c1, c2)
+    }
+}
+
+fn collides_fast(c1: &Collider, c2: &Collider) -> bool {
+    let (x1, y1) = c1.position;
+    let (x2, y2) = c2.position;
+    let radius = c1.radius + c2.radius;
+    if radius < 0.0 {
+        return false;
+    }
+    let dx = x1 - x2;
+    let dy = y1 - y2;
+    dx * dx + dy * dy <= radius * radius
+}
+
+fn collides_dist(c1: &Collider, c2: &Collider) -> bool {
     let p1 = c1.position;
     let p2 = c2.position;
     let radius = c1.radius + c2.radius;

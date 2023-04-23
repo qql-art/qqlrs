@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use raqote::{DrawOptions, DrawTarget, PathBuilder, SolidSource, Source, StrokeStyle};
 
 use super::color::{ColorDb, ColorKey, ColorSpec};
+use super::config::Config;
 use super::layouts::StartPointGroups;
 use super::math::{angle, cos, dist, modulo, pi, rescale, sin};
 use super::rand::Rng;
@@ -766,13 +767,13 @@ impl GroupedFlowLines {
     }
 }
 
-fn build_sectors() -> Sectors {
+fn build_sectors(config: &Config) -> Sectors {
     const CHECK_MARGIN: f64 = 0.05;
     const CHECK_LEFT: f64 = -VIRTUAL_W * CHECK_MARGIN;
     const CHECK_RIGHT: f64 = VIRTUAL_W + VIRTUAL_W * CHECK_MARGIN;
     const CHECK_TOP: f64 = -VIRTUAL_H * CHECK_MARGIN;
     const CHECK_BOTTOM: f64 = VIRTUAL_H + VIRTUAL_H * CHECK_MARGIN;
-    Sectors::new(CHECK_LEFT, CHECK_RIGHT, CHECK_TOP, CHECK_BOTTOM)
+    Sectors::new(config, CHECK_LEFT, CHECK_RIGHT, CHECK_TOP, CHECK_BOTTOM)
 }
 
 #[derive(Debug)]
@@ -1044,6 +1045,7 @@ fn paint(
     canvas_width: i32,
     traits: &Traits,
     color_db: &ColorDb,
+    config: &Config,
     points: Points,
     color_scheme: &ColorScheme,
     colors_used: &mut HashSet<ColorKey>,
@@ -1075,6 +1077,9 @@ fn paint(
 
     for mut p in points.0 {
         let (x, y) = p.position;
+        if config.inflate_draw_radius {
+            p.scale = p.scale.max(w(0.00041));
+        }
 
         // splatter is much more likely closer to the splatter center
         let splatter_odds_adjustment = f64::powf(
@@ -1311,7 +1316,7 @@ pub struct Render {
     pub colors_used: HashSet<ColorKey>,
 }
 
-pub fn draw(seed: &[u8; 32], color_db: &ColorDb, canvas_width: i32) -> Render {
+pub fn draw(seed: &[u8; 32], color_db: &ColorDb, config: &Config, canvas_width: i32) -> Render {
     let traits = Traits::from_seed(seed);
     let mut rng = Rng::from_seed(&seed[..]);
     eprintln!("initialized traits");
@@ -1330,7 +1335,7 @@ pub fn draw(seed: &[u8; 32], color_db: &ColorDb, canvas_width: i32) -> Render {
 
     let grouped_flow_lines =
         GroupedFlowLines::build(flow_field, ignore_flow_field, start_points, &mut rng);
-    let mut sectors: Sectors = build_sectors();
+    let mut sectors: Sectors = build_sectors(&config);
     let mut colors_used: HashSet<ColorKey> = HashSet::new();
     let points = Points::build(
         &traits,
@@ -1351,6 +1356,7 @@ pub fn draw(seed: &[u8; 32], color_db: &ColorDb, canvas_width: i32) -> Render {
         canvas_width,
         &traits,
         color_db,
+        &config,
         points,
         &color_scheme,
         &mut colors_used,

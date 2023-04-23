@@ -1,35 +1,51 @@
-use std::num::ParseIntError;
+use core::fmt::Debug;
+use std::{fmt::Display, str::FromStr};
 
-fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() != 2 {
-        eprintln!(
-            "usage: {} <seed>",
-            args.get(0).map(String::as_str).unwrap_or("qql-cli")
-        );
-        std::process::exit(1);
-    }
-    let seed: [u8; 32] = match decode_hex(args[1].trim_start_matches("0x"))
-        .ok()
-        .and_then(|s| TryFrom::try_from(s).ok())
-    {
-        Some(x) => x,
-        _ => {
-            eprintln!("invalid seed");
-            std::process::exit(1);
-        }
-    };
+use clap::Parser;
 
-    let color_db = qql::color::ColorDb::from_bundle();
-    let dt = qql::art::draw(&seed, &color_db, 2400).dt;
-    dt.write_png("qql.png").expect("dt.write_png");
-    eprintln!("wrote png");
+#[derive(Parser)]
+struct Opts {
+    seed: Seed,
 }
 
-// copied from Sven Marnach: <https://stackoverflow.com/a/52992629>
-fn decode_hex(s: &str) -> Result<Vec<u8>, ParseIntError> {
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16))
-        .collect()
+#[derive(Copy, Clone)]
+struct Seed(pub [u8; 32]);
+impl Seed {
+    fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+impl FromStr for Seed {
+    type Err = anyhow::Error;
+    fn from_str(mut s: &str) -> Result<Self, Self::Err> {
+        if s.starts_with("0x") {
+            s = &s[2..];
+        }
+        let bytes: Vec<u8> = hex::decode(s)?;
+        let bytes: [u8; 32] = <[u8; 32]>::try_from(bytes).unwrap();
+        Ok(Seed(bytes))
+    }
+}
+impl Debug for Seed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("0x")?;
+        let mut buf = [0u8; 2 * 32];
+        hex::encode_to_slice(self.0, &mut buf).unwrap();
+        f.write_str(std::str::from_utf8(&buf).unwrap())
+    }
+}
+impl Display for Seed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        <Self as Debug>::fmt(self, f)
+    }
+}
+
+fn main() {
+    let opts = Opts::parse();
+
+    let color_db = qql::color::ColorDb::from_bundle();
+    let dt = qql::art::draw(opts.seed.as_bytes(), &color_db, 2400).dt;
+    let filename = format!("{}.png", &opts.seed);
+    dt.write_png(&filename).expect("dt.write_png");
+    eprintln!("wrote png: {}", filename);
 }

@@ -16,6 +16,9 @@ name = "qql-cli"
 debug = true
 
 [dependencies]
+anyhow = "1.0.70"
+clap = { version = "4.2.4", features = ["derive"] }
+hex = "0.4.3"
 hex-literal = "0.3.4"
 raqote = "0.8.2"
 serde = { version = "1.0.160", features = ["derive"] }

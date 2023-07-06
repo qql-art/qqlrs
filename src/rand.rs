@@ -1,28 +1,26 @@
 use std::num::Wrapping;
 
+// Linear congruential generator parameters
+const MUL: u64 = 6364136223846793005; // Knuth section 3.3.4 (p.108)
+const INC: u64 = 1442695040888963407;
+
 pub struct Rng {
-    state: [u32; 4],
+    state: u64,
     next_gaussian: Option<f64>,
 }
 
 impl Rng {
     pub fn from_seed(seed: &[u8]) -> Rng {
-        let lower = murmur2(seed, 1690382925).to_be_bytes();
-        let upper = murmur2(seed, 72970470).to_be_bytes();
-
         // NOTE(wchargin): There are endianness dragons here. The original JavaScript code uses
         // `DataView.setUint32` to portably write a big-endian integer into an `ArrayBuffer`.
         // However, this buffer is the backing storage of a `Uint16Array`, which later reads from
         // the data in platform-dependent order.
         //
         // This Rust port chooses to use the little-endian behavior everywhere for portability. The
-        // original behavior can be recovered by changing `from_le_bytes` to `from_ne_bytes`.
-        let state = [
-            u32::from(u16::from_le_bytes([lower[0], lower[1]])),
-            u32::from(u16::from_le_bytes([lower[2], lower[3]])),
-            u32::from(u16::from_le_bytes([upper[0], upper[1]])),
-            u32::from(u16::from_le_bytes([upper[2], upper[3]])),
-        ];
+        // original behavior can be recovered by changing `swap_bytes` to `to_be`.
+        let lower = murmur2(seed, 1690382925).swap_bytes();
+        let upper = murmur2(seed, 72970470).swap_bytes();
+        let state = u64::from(lower) | (u64::from(upper) << 32);
         Rng {
             state,
             next_gaussian: None,
@@ -31,28 +29,14 @@ impl Rng {
 
     /// Picks a random value uniformly distributed between `0.0` (inclusive) and `1.0` (exclusive).
     pub fn rnd(&mut self) -> f64 {
-        const M0: Wrapping<u32> = Wrapping(0x7f2d);
-        const M1: Wrapping<u32> = Wrapping(0x4c95);
-        const M2: Wrapping<u32> = Wrapping(0xf42d);
-        const M3: Wrapping<u32> = Wrapping(0x5851);
-        const A0: Wrapping<u32> = Wrapping(0x814f);
-        const A1: Wrapping<u32> = Wrapping(0xf767);
-        const A2: Wrapping<u32> = Wrapping(0x7b7e);
-        const A3: Wrapping<u32> = Wrapping(0x1405);
-
+        let old_state = self.state;
         // Advance internal state.
-        let [s0, s1, s2, s3] = self.state.map(Wrapping);
-
-        let new0 = A0 + M0 * s0;
-        let new1 = A1 + M0 * s1 + (M1 * s0 + (new0 >> 16));
-        let new2 = A2 + M0 * s2 + M1 * s1 + (M2 * s0 + (new1 >> 16));
-        let new3 = A3 + M0 * s3 + (M1 * s2 + M2 * s1) + (M3 * s0 + (new2 >> 16));
-
-        self.state = [new0, new1, new2, new3].map(|x| x.0 & 0xffff);
-
+        self.state = old_state.wrapping_mul(MUL).wrapping_add(INC);
         // Calculate output function (XSH RR) using the old state.
-        let xorshifted: u32 = ((s3 << 21) + (((s3 >> 2) ^ s2) << 5) + (((s2 >> 2) ^ s1) >> 11)).0;
-        let fac: u32 = (xorshifted >> (s3.0 >> 11)) | (xorshifted << (-(s3.0 as i32 >> 11) & 31));
+        // This is a standard PCG-XSH-RR generator (O'Neill 2014, section 6.3.1) but drops 3 bits
+        // during the xorshift to be compatible with an anomaly in the JavaScript implementation.
+        let xorshifted = ((((old_state >> 18) & !(3 << 30)) ^ old_state) >> 27) as u32;
+        let fac = xorshifted.rotate_right((old_state >> 59) as u32);
         2.0f64.powi(-32) * f64::from(fac)
     }
 
@@ -201,13 +185,13 @@ mod test {
 
     #[test]
     fn test_seed_state() {
-        assert_eq!(Rng::from_seed(b"").state, [0xeb00, 0x43ae, 0x85e9, 0x381a]);
+        assert_eq!(Rng::from_seed(b"").state, 0x381a85e943aeeb00);
         assert_eq!(
             Rng::from_seed(&hex!(
                 "efa7bdd92b5e9cd9de9b54ac0e3dc60623f1c989a80ed9c5157fffff10c2a148"
             ))
             .state,
-            [0xa894, 0x2177, 0x9757, 0x5069]
+            0x506997572177a894
         );
     }
 

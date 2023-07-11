@@ -1,5 +1,5 @@
 use core::fmt::Debug;
-use std::{fmt::Display, str::FromStr};
+use std::{fmt::Display, path::PathBuf, str::FromStr};
 
 use clap::Parser;
 
@@ -8,6 +8,8 @@ struct Opts {
     seed: Seed,
     #[clap(short, default_value = "2400")]
     width: i32,
+    #[clap(short = 'o')]
+    output_filename: Option<PathBuf>,
     #[clap(flatten)]
     config: qql::config::Config,
 }
@@ -49,15 +51,23 @@ fn main() {
 
     let color_db = qql::color::ColorDb::from_bundle();
     let dt = qql::art::draw(opts.seed.as_bytes(), &color_db, &opts.config, opts.width).dt;
-    let filename = format!(
-        "{}{}.png",
-        &opts.seed,
+
+    let filename = if let Some(f) = opts.output_filename {
+        f
+    } else {
+        let mut basename = opts.seed.to_string();
         if opts.config.inflate_draw_radius {
-            "-inflated"
-        } else {
-            "-canon"
+            basename.push_str("-inflated");
         }
-    );
-    dt.write_png(&filename).expect("dt.write_png");
-    eprintln!("wrote png: {}", filename);
+        if opts.config.fast_collisions {
+            basename.push_str("-fastcoll");
+        }
+        basename.push_str(".png");
+        PathBuf::from(basename)
+    };
+    if let Err(e) = dt.write_png(&filename) {
+        eprintln!("Failed to write PNG to {}: {}", filename.display(), e);
+        std::process::exit(1);
+    }
+    eprintln!("wrote png: {}", filename.display());
 }

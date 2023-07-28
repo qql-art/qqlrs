@@ -25,7 +25,7 @@ pub struct Config {
     /// Restrict rendering to a region of the canvas.
     ///
     /// Values are specified as floats from 0.0 (top/left) to 1.0 (bottom/right). For instance,
-    /// `0.5x0.5+0.25+0.25` renders the center quarter of the canvas. See `--width` about how this
+    /// `0.1x0.1+0.45+0.45` renders the center 1% of the canvas. See `--width` about how this
     /// affects the output image size.
     #[clap(long, value_name = "WxH+X+Y")]
     pub viewport: Option<Viewport>,

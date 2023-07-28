@@ -1076,8 +1076,8 @@ impl PaintCtx {
 
         let canvas_height = canvas_width * 5 / 4;
         let dt = DrawTarget::new(
-            (f64::from(canvas_width) * cfg_vp.map_or(1.0, |vp| vp.width())) as i32,
-            (f64::from(canvas_height) * cfg_vp.map_or(1.0, |vp| vp.height())) as i32,
+            (f64::from(canvas_width) * cfg_vp.map_or(1.0, |vp| vp.width())).round() as i32,
+            (f64::from(canvas_height) * cfg_vp.map_or(1.0, |vp| vp.height())).round() as i32,
         );
 
         let min_circle_steps = f64::max(8.0, config.min_circle_steps.unwrap_or(0) as f64);

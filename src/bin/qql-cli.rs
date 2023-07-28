@@ -7,7 +7,13 @@ use clap::Parser;
 #[derive(Parser)]
 struct Opts {
     seed: Seed,
-    #[clap(short, default_value = "2400")]
+
+    /// Canvas width.
+    ///
+    /// This applies to the virtual canvas, before any viewport is computed. For instance, if
+    /// `--width` is 1000 and `--viewport` is `0.5x0.5+0.25+0.25`, the actual output file will be
+    /// 500px wide.
+    #[clap(short, long, default_value = "2400")]
     width: i32,
     #[clap(short = 'o')]
     output_filename: Option<PathBuf>,

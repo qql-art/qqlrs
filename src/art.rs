@@ -1044,18 +1044,50 @@ fn perturb_color(color: Hsb, spec: &ColorSpec, rng: &mut Rng) -> Hsb {
 struct PaintCtx {
     dt: DrawTarget,
     min_circle_steps: f64,
+    viewport: VirtualViewport,
+    /// Ratio mapping from "virtual space" (used for layout) to "raster space" (actual pixels on
+    /// the output `DrawTarget`).
+    scale_ratio: f32,
+}
+
+#[derive(Debug)]
+struct VirtualViewport {
+    left: f64,
+    right: f64,
+    top: f64,
+    bottom: f64,
+}
+
+impl VirtualViewport {
+    fn from_config(vp: &super::config::Viewport) -> Self {
+        Self {
+            left: vp.left() * VIRTUAL_W,
+            right: vp.right() * VIRTUAL_W,
+            top: vp.top() * VIRTUAL_H,
+            bottom: vp.bottom() * VIRTUAL_H,
+        }
+    }
 }
 
 impl PaintCtx {
     fn new(config: &Config, canvas_width: i32) -> Self {
+        let cfg_vp = config.viewport.as_ref();
+        let virtual_vp = VirtualViewport::from_config(&cfg_vp.cloned().unwrap_or_default());
+
         let canvas_height = canvas_width * 5 / 4;
-        let dt = DrawTarget::new(canvas_width, canvas_height);
+        let dt = DrawTarget::new(
+            (f64::from(canvas_width) * cfg_vp.map_or(1.0, |vp| vp.width())) as i32,
+            (f64::from(canvas_height) * cfg_vp.map_or(1.0, |vp| vp.height())) as i32,
+        );
 
         let min_circle_steps = f64::max(8.0, config.min_circle_steps.unwrap_or(0) as f64);
+        let scale_ratio = (canvas_width as f64 / VIRTUAL_W) as f32;
 
         Self {
             dt,
             min_circle_steps,
+            viewport: virtual_vp,
+            scale_ratio,
         }
     }
 }
@@ -1291,7 +1323,7 @@ fn draw_clean_circle(
     let dt = &mut pctx.dt;
 
     let r = (r - thickness * 0.5).max(w(0.0002));
-    let stroke_weight = (thickness * 0.95 * dt.width() as f64 / VIRTUAL_W) as f32;
+    let stroke_weight = thickness as f32 * 0.95 * pctx.scale_ratio;
 
     let variance = w(0.0015).min(r * eccentricity);
     let rx = rng.gauss(r, variance);
@@ -1300,15 +1332,27 @@ fn draw_clean_circle(
     // The JavaScript algorithm computes an unused `startingTheta = rng.uniform(0.0, pi(2.0))`.
     // We don't need to compute that, but we need to burn a uniform deviate to keep RNG synced.
     rng.rnd();
+
+    if x + rx < pctx.viewport.left
+        || x - rx > pctx.viewport.right
+        || y + ry < pctx.viewport.top
+        || y - ry > pctx.viewport.bottom
+    {
+        // Circle is entirely outside viewport; skip painting it. There are no more stateful RNG
+        // calls past this point, so we can bail entirely, skipping `dt.stroke` (vast majority of
+        // time spent) and also the trigonometric functions (not nearly as expensive but do show up
+        // on the profile).
+        return;
+    }
+
     let num_steps = (r * pi(2.0) / w(0.0005)).max(pctx.min_circle_steps);
     let step = pi(2.0) / num_steps;
 
     let mut pb = PathBuilder::new();
     let mut theta = 0.0;
     while theta < pi(2.0) {
-        let wr = dt.width() as f32 / VIRTUAL_W as f32;
-        let x = (x + rx * theta.cos()) as f32 * wr;
-        let y = (y + ry * theta.sin()) as f32 * wr;
+        let x = (x - pctx.viewport.left + rx * theta.cos()) as f32 * pctx.scale_ratio;
+        let y = (y - pctx.viewport.top + ry * theta.sin()) as f32 * pctx.scale_ratio;
         if theta == 0.0 {
             pb.move_to(x, y);
         } else {

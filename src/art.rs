@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use raqote::{DrawOptions, DrawTarget, PathBuilder, SolidSource, Source, StrokeStyle};
 
 use super::color::{ColorDb, ColorKey, ColorSpec};
-use super::config::Config;
+use super::config::{Config, FractionalViewport};
 use super::layouts::StartPointGroups;
 use super::math::{angle, cos, dist, modulo, pi, rescale, sin};
 use super::rand::Rng;
@@ -1060,8 +1060,8 @@ struct VirtualViewport {
     bottom: f64,
 }
 
-impl VirtualViewport {
-    fn from_config(vp: &super::config::FractionalViewport) -> Self {
+impl<'a> From<&'a FractionalViewport> for VirtualViewport {
+    fn from(vp: &'a FractionalViewport) -> Self {
         Self {
             left: vp.left() * VIRTUAL_W,
             right: vp.right() * VIRTUAL_W,
@@ -1072,14 +1072,16 @@ impl VirtualViewport {
 }
 
 impl PaintCtx {
-    fn new(config: &Config, canvas_width: i32) -> Self {
-        let cfg_vp = config.viewport.as_ref();
-        let virtual_vp = VirtualViewport::from_config(&cfg_vp.cloned().unwrap_or_default());
+    /// Assembles a new paint context.
+    ///
+    /// The given `FractionalViewport` overrides any viewport set in the `Config`.
+    fn new(config: &Config, fvp: &FractionalViewport, canvas_width: i32) -> Self {
+        let virtual_vp = VirtualViewport::from(fvp);
 
         let canvas_height = canvas_width * 5 / 4;
         let dt = DrawTarget::new(
-            (f64::from(canvas_width) * cfg_vp.map_or(1.0, |vp| vp.width())).round() as i32,
-            (f64::from(canvas_height) * cfg_vp.map_or(1.0, |vp| vp.height())).round() as i32,
+            (f64::from(canvas_width) * fvp.width()).round() as i32,
+            (f64::from(canvas_height) * fvp.height()).round() as i32,
         );
 
         let min_circle_steps = f64::max(8.0, config.min_circle_steps.unwrap_or(0) as f64);
@@ -1104,7 +1106,11 @@ fn paint(
     colors_used: &mut HashSet<ColorKey>,
     rng: &mut Rng,
 ) -> DrawTarget {
-    let mut pctx = PaintCtx::new(config, canvas_width);
+    let mut pctx = PaintCtx::new(
+        config,
+        &config.viewport.as_ref().cloned().unwrap_or_default(),
+        canvas_width,
+    );
     pctx.dt.fill_rect(
         0.0,
         0.0,

@@ -1101,7 +1101,7 @@ fn paint(
     traits: &Traits,
     color_db: &ColorDb,
     config: &Config,
-    points: Points,
+    mut points: Points,
     color_scheme: &ColorScheme,
     colors_used: &mut HashSet<ColorKey>,
     rng: &mut Rng,
@@ -1124,6 +1124,11 @@ fn paint(
         },
         &DrawOptions::new(),
     );
+    if config.inflate_draw_radius {
+        for p in &mut points.0 {
+            p.scale = p.scale.max(w(0.00041));
+        }
+    }
 
     let stack_offset = match traits.color_mode {
         ColorMode::Stacked => Some((rng.gauss(0.0, w(0.0013)), rng.gauss(0.0, w(0.0013)).abs())),
@@ -1133,11 +1138,8 @@ fn paint(
 
     let mut splatter_points = Vec::new();
 
-    for mut p in points.0 {
+    for p in &points.0 {
         let (x, y) = p.position;
-        if config.inflate_draw_radius {
-            p.scale = p.scale.max(w(0.00041));
-        }
 
         // splatter is much more likely closer to the splatter center
         let splatter_odds_adjustment = f64::powf(
@@ -1160,16 +1162,19 @@ fn paint(
                         density: p.bullseye.density * rng.gauss(0.99, 0.03),
                         rings: p.bullseye.rings,
                     },
-                    ..p
+                    ..p.clone()
                 },
                 &mut pctx,
                 rng,
             );
         }
-        if !is_zebra {
+        if is_zebra {
+            draw_ring_dot(&p, &mut pctx, rng);
+        } else {
+            let mut p = p.clone();
             p.secondary_color = p.primary_color;
+            draw_ring_dot(&p, &mut pctx, rng);
         }
-        draw_ring_dot(&p, &mut pctx, rng);
     }
 
     for mut p in splatter_points {

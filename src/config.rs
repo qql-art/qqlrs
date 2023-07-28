@@ -19,7 +19,7 @@ pub struct Config {
     /// resolutions (say, above 10k pixels wide), the segments may start to become visible,
     /// especially on small circles. Crank this value up linearly to compensate, at the cost of
     /// render time.
-    #[clap(long)]
+    #[clap(long, value_name = "STEPS")]
     pub min_circle_steps: Option<u32>,
 
     /// Restrict rendering to a region of the canvas.

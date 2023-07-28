@@ -1041,6 +1041,10 @@ fn perturb_color(color: Hsb, spec: &ColorSpec, rng: &mut Rng) -> Hsb {
     Hsb(hue, sat, bright)
 }
 
+struct PaintCtx {
+    dt: DrawTarget,
+}
+
 fn paint(
     canvas_width: i32,
     traits: &Traits,
@@ -1052,8 +1056,9 @@ fn paint(
     rng: &mut Rng,
 ) -> DrawTarget {
     let canvas_height = canvas_width * 5 / 4;
-    let mut dt = DrawTarget::new(canvas_width, canvas_height);
-    dt.fill_rect(
+    let dt = DrawTarget::new(canvas_width, canvas_height);
+    let mut pctx = PaintCtx { dt };
+    pctx.dt.fill_rect(
         0.0,
         0.0,
         canvas_width as f32,
@@ -1104,14 +1109,14 @@ fn paint(
                     },
                     ..p
                 },
-                &mut dt,
+                &mut pctx,
                 rng,
             );
         }
         if !is_zebra {
             p.secondary_color = p.primary_color;
         }
-        draw_ring_dot(&p, &mut dt, rng);
+        draw_ring_dot(&p, &mut pctx, rng);
     }
 
     for mut p in splatter_points {
@@ -1125,12 +1130,12 @@ fn paint(
         p.primary_color = final_color;
         p.secondary_color = final_color;
         p.bullseye.density = f64::max(0.17, p.bullseye.density * 0.7);
-        draw_ring_dot(&p, &mut dt, rng);
+        draw_ring_dot(&p, &mut pctx, rng);
     }
-    dt
+    pctx.dt
 }
 
-fn draw_ring_dot(pt: &Point, dt: &mut DrawTarget, rng: &mut Rng) {
+fn draw_ring_dot(pt: &Point, pctx: &mut PaintCtx, rng: &mut Rng) {
     let mut num_rings = pt.bullseye.rings;
     // TODO(wchargin): Simplify under the assumption that `num_rings` starts as 1, 2, 3, or 7.
     if pt.scale < rescale(pt.bullseye.density, (0.15, 1.0), (w(0.0039), w(0.001))) {
@@ -1196,7 +1201,7 @@ fn draw_ring_dot(pt: &Point, dt: &mut DrawTarget, rng: &mut Rng) {
             final_thickness,
             variance_adjust,
             color,
-            dt,
+            pctx,
             rng,
         );
 
@@ -1210,7 +1215,7 @@ fn draw_messy_circle(
     thickness: f64,
     variance_adjust: f64,
     color: Hsb,
-    dt: &mut DrawTarget,
+    pctx: &mut PaintCtx,
     rng: &mut Rng,
 ) {
     let source = color.to_rgb().to_source();
@@ -1257,7 +1262,7 @@ fn draw_messy_circle(
         let thickness = rng
             .gauss(mean_thickness, single_line_variance)
             .max(w(0.0002));
-        draw_clean_circle((x, y), r, thickness, 0.007, &source, dt, rng);
+        draw_clean_circle((x, y), r, thickness, 0.007, &source, pctx, rng);
     }
 }
 
@@ -1267,9 +1272,11 @@ fn draw_clean_circle(
     thickness: f64,
     eccentricity: f64,
     source: &Source,
-    dt: &mut DrawTarget,
+    pctx: &mut PaintCtx,
     rng: &mut Rng,
 ) {
+    let dt = &mut pctx.dt;
+
     let r = (r - thickness * 0.5).max(w(0.0002));
     let stroke_weight = (thickness * 0.95 * dt.width() as f64 / VIRTUAL_W) as f32;
 

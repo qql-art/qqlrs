@@ -1043,6 +1043,21 @@ fn perturb_color(color: Hsb, spec: &ColorSpec, rng: &mut Rng) -> Hsb {
 
 struct PaintCtx {
     dt: DrawTarget,
+    min_circle_steps: f64,
+}
+
+impl PaintCtx {
+    fn new(config: &Config, canvas_width: i32) -> Self {
+        let canvas_height = canvas_width * 5 / 4;
+        let dt = DrawTarget::new(canvas_width, canvas_height);
+
+        let min_circle_steps = f64::max(8.0, config.min_circle_steps.unwrap_or(0) as f64);
+
+        Self {
+            dt,
+            min_circle_steps,
+        }
+    }
 }
 
 fn paint(
@@ -1055,14 +1070,12 @@ fn paint(
     colors_used: &mut HashSet<ColorKey>,
     rng: &mut Rng,
 ) -> DrawTarget {
-    let canvas_height = canvas_width * 5 / 4;
-    let dt = DrawTarget::new(canvas_width, canvas_height);
-    let mut pctx = PaintCtx { dt };
+    let mut pctx = PaintCtx::new(config, canvas_width);
     pctx.dt.fill_rect(
         0.0,
         0.0,
-        canvas_width as f32,
-        canvas_height as f32,
+        pctx.dt.width() as f32,
+        pctx.dt.height() as f32,
         {
             let spec = color_db
                 .color(color_scheme.background)
@@ -1287,7 +1300,7 @@ fn draw_clean_circle(
     // The JavaScript algorithm computes an unused `startingTheta = rng.uniform(0.0, pi(2.0))`.
     // We don't need to compute that, but we need to burn a uniform deviate to keep RNG synced.
     rng.rnd();
-    let num_steps = (r * pi(2.0) / w(0.0005)).max(8.0);
+    let num_steps = (r * pi(2.0) / w(0.0005)).max(pctx.min_circle_steps);
     let step = pi(2.0) / num_steps;
 
     let mut pb = PathBuilder::new();

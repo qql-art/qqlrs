@@ -28,18 +28,19 @@ pub struct Config {
     /// `0.1x0.1+0.45+0.45` renders the center 1% of the canvas. See `--width` about how this
     /// affects the output image size.
     #[clap(long, value_name = "WxH+X+Y")]
-    pub viewport: Option<Viewport>,
+    pub viewport: Option<FractionalViewport>,
 }
 
+/// A viewport/crop specification in fractional space, where both axes range from `0.0` to `1.0`.
 #[derive(Debug, PartialEq, Clone)]
-pub struct Viewport {
+pub struct FractionalViewport {
     width: f64,
     height: f64,
     left: f64,
     top: f64,
 }
 
-impl Default for Viewport {
+impl Default for FractionalViewport {
     fn default() -> Self {
         Self {
             width: 1.0,
@@ -50,7 +51,7 @@ impl Default for Viewport {
     }
 }
 
-impl Viewport {
+impl FractionalViewport {
     pub fn width(&self) -> f64 {
         self.width
     }
@@ -72,7 +73,7 @@ impl Viewport {
 }
 
 /// Expects a string like `WxH+X+Y`, as with imagemagick geometry syntax.
-impl FromStr for Viewport {
+impl FromStr for FractionalViewport {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -83,7 +84,7 @@ impl FromStr for Viewport {
             Some((width, height, left, top))
         }
         let (width, height, left, top) = parts(s).context("Invalid format; expected WxH+X+Y")?;
-        Ok(Viewport {
+        Ok(FractionalViewport {
             width: width.parse().context("Invalid width")?,
             height: height.parse().context("Invalid height")?,
             left: left.parse().context("Invalid x-offset")?,
@@ -99,8 +100,8 @@ mod tests {
     #[test]
     fn test_viewport_fromstr_ok() {
         assert_eq!(
-            "100x200+30+60".parse::<Viewport>().unwrap(),
-            Viewport {
+            "100x200+30+60".parse::<FractionalViewport>().unwrap(),
+            FractionalViewport {
                 width: 100.0,
                 height: 200.0,
                 left: 30.0,
@@ -112,7 +113,7 @@ mod tests {
     #[test]
     fn test_viewport_fromstr_errs() {
         fn check(input: &str, expected_err: &str) {
-            let msg = input.parse::<Viewport>().unwrap_err().to_string();
+            let msg = input.parse::<FractionalViewport>().unwrap_err().to_string();
             assert_eq!(msg, expected_err);
         }
         check("100x200+30", "Invalid format; expected WxH+X+Y");

@@ -1050,6 +1050,8 @@ struct PaintCtx {
     scale_ratio: f32,
 }
 
+/// A viewport/crop specification in virtual canvas space, where the horizontal axis ranges from
+/// `0.0` to `VIRTUAL_W` and the vertical axis ranges from `0.0` to `VIRTUAL_H`.
 #[derive(Debug)]
 struct VirtualViewport {
     left: f64,
@@ -1059,7 +1061,7 @@ struct VirtualViewport {
 }
 
 impl VirtualViewport {
-    fn from_config(vp: &super::config::Viewport) -> Self {
+    fn from_config(vp: &super::config::FractionalViewport) -> Self {
         Self {
             left: vp.left() * VIRTUAL_W,
             right: vp.right() * VIRTUAL_W,

@@ -1323,7 +1323,7 @@ fn draw_clean_circle(
     let dt = &mut pctx.dt;
 
     let r = (r - thickness * 0.5).max(w(0.0002));
-    let stroke_weight = thickness as f32 * 0.95 * pctx.scale_ratio;
+    let stroke_weight = thickness * 0.95;
 
     let variance = w(0.0015).min(r * eccentricity);
     let rx = rng.gauss(r, variance);
@@ -1333,10 +1333,10 @@ fn draw_clean_circle(
     // We don't need to compute that, but we need to burn a uniform deviate to keep RNG synced.
     rng.rnd();
 
-    if x + rx < pctx.viewport.left
-        || x - rx > pctx.viewport.right
-        || y + ry < pctx.viewport.top
-        || y - ry > pctx.viewport.bottom
+    if x + (rx + stroke_weight / 2.0) < pctx.viewport.left
+        || x - (rx + stroke_weight / 2.0) > pctx.viewport.right
+        || y + (ry + stroke_weight / 2.0) < pctx.viewport.top
+        || y - (ry + stroke_weight / 2.0) > pctx.viewport.bottom
     {
         // Circle is entirely outside viewport; skip painting it. There are no more stateful RNG
         // calls past this point, so we can bail entirely, skipping `dt.stroke` (vast majority of
@@ -1367,7 +1367,7 @@ fn draw_clean_circle(
         &path,
         source,
         &StrokeStyle {
-            width: stroke_weight,
+            width: stroke_weight as f32 * pctx.scale_ratio,
             ..StrokeStyle::default()
         },
         &DrawOptions::new(),

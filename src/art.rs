@@ -1106,30 +1106,116 @@ fn paint(
     colors_used: &mut HashSet<ColorKey>,
     rng: &mut Rng,
 ) -> DrawTarget {
-    let mut pctx = PaintCtx::new(
-        config,
-        &config.viewport.as_ref().cloned().unwrap_or_default(),
-        canvas_width,
-    );
-    pctx.dt.fill_rect(
-        0.0,
-        0.0,
-        pctx.dt.width() as f32,
-        pctx.dt.height() as f32,
-        {
-            let spec = color_db
-                .color(color_scheme.background)
-                .expect("invalid background");
-            &Hsb(spec.hue, spec.sat, spec.bright).to_rgb().to_source()
-        },
-        &DrawOptions::new(),
-    );
     if config.inflate_draw_radius {
         for p in &mut points.0 {
             p.scale = p.scale.max(w(0.00041));
         }
     }
+    let fvp = &config.viewport.as_ref().cloned().unwrap_or_default();
 
+    let hsteps: u32 = config.chunks.w.into();
+    let vsteps: u32 = config.chunks.h.into();
+    let each_width = fvp.width() / hsteps as f64;
+    let each_height = fvp.height() / vsteps as f64;
+
+    let background_color = {
+        let spec = color_db
+            .color(color_scheme.background)
+            .expect("invalid background");
+        &Hsb(spec.hue, spec.sat, spec.bright).to_rgb().to_source()
+    };
+
+    struct Output {
+        x: u32,
+        y: u32,
+        // `DrawTarget` is `!Send`, so we break it down into its components.
+        width: i32,
+        height: i32,
+        data: Vec<u32>,
+        colors_used: HashSet<ColorKey>,
+    }
+    use std::sync::{Arc, Mutex};
+    let outputs = Arc::new(Mutex::new(Vec::<Output>::new()));
+
+    std::thread::scope(|s| {
+        for x in 0..hsteps {
+            for y in 0..vsteps {
+                let mut rng = rng.clone();
+                let outputs = outputs.clone();
+                let points = &points;
+                s.spawn(move || {
+                    eprintln!("painting chunk ({}, {})", x, y);
+                    let fvp = FractionalViewport::from_whlt(
+                        each_width,
+                        each_height,
+                        fvp.left() + each_width * x as f64,
+                        fvp.top() + each_height * y as f64,
+                    );
+                    let mut pctx = PaintCtx::new(config, &fvp, canvas_width);
+                    pctx.dt.fill_rect(
+                        0.0,
+                        0.0,
+                        pctx.dt.width() as f32,
+                        pctx.dt.height() as f32,
+                        background_color,
+                        &DrawOptions::new(),
+                    );
+                    let mut colors_used = HashSet::new();
+                    paint_onto_ctx(
+                        &mut pctx,
+                        traits,
+                        color_db,
+                        &points,
+                        color_scheme,
+                        &mut colors_used,
+                        &mut rng,
+                    );
+                    let output = Output {
+                        x,
+                        y,
+                        width: pctx.dt.width(),
+                        height: pctx.dt.height(),
+                        data: pctx.dt.into_inner(),
+                        colors_used,
+                    };
+                    outputs.lock().expect("poison").push(output);
+                });
+            }
+        }
+    });
+
+    let mut pctx_final = PaintCtx::new(config, &fvp, canvas_width);
+    for output in outputs.lock().expect("poison").iter() {
+        let img = raqote::Image {
+            width: output.width,
+            height: output.height,
+            data: output.data.as_slice(),
+        };
+        // Note: we're potentially using subpixel calculations all over (e.g., if `Chunks` is `3x1`
+        // and the width does not divide `3`), but this seems to kind of just work out? There are
+        // some slight artifacts, but not visible to the (my) naked eye: you can see them if you
+        // pixel-diff a `3x1` and a `1x1` render and *really* blow out the contrast, but even
+        // overlaying that onto the composited image to draw the eye, I see nothing untoward.
+        pctx_final.dt.draw_image_at(
+            pctx_final.dt.width() as f32 * output.x as f32 / hsteps as f32,
+            pctx_final.dt.height() as f32 * output.y as f32 / vsteps as f32,
+            &img,
+            &DrawOptions::new(),
+        );
+        colors_used.extend(&output.colors_used);
+    }
+    pctx_final.dt
+}
+
+fn paint_onto_ctx(
+    pctx: &mut PaintCtx,
+    traits: &Traits,
+    color_db: &ColorDb,
+    points: &Points,
+    color_scheme: &ColorScheme,
+    colors_used: &mut HashSet<ColorKey>,
+    rng: &mut Rng,
+) {
     let stack_offset = match traits.color_mode {
         ColorMode::Stacked => Some((rng.gauss(0.0, w(0.0013)), rng.gauss(0.0, w(0.0013)).abs())),
         _ => None,
@@ -1164,16 +1250,16 @@ fn paint(
                     },
                     ..p.clone()
                 },
-                &mut pctx,
+                pctx,
                 rng,
             );
         }
         if is_zebra {
-            draw_ring_dot(&p, &mut pctx, rng);
+            draw_ring_dot(&p, pctx, rng);
         } else {
             let mut p = p.clone();
             p.secondary_color = p.primary_color;
-            draw_ring_dot(&p, &mut pctx, rng);
+            draw_ring_dot(&p, pctx, rng);
         }
     }
 
@@ -1188,9 +1274,8 @@ fn paint(
         p.primary_color = final_color;
         p.secondary_color = final_color;
         p.bullseye.density = f64::max(0.17, p.bullseye.density * 0.7);
-        draw_ring_dot(&p, &mut pctx, rng);
+        draw_ring_dot(&p, pctx, rng);
     }
-    pctx.dt
 }
 
 fn draw_ring_dot(pt: &Point, pctx: &mut PaintCtx, rng: &mut Rng) {

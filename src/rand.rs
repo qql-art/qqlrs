@@ -4,6 +4,7 @@ use std::num::Wrapping;
 const MUL: u64 = 6364136223846793005; // Knuth section 3.3.4 (p.108)
 const INC: u64 = 1442695040888963407;
 
+#[derive(Clone)]
 pub struct Rng {
     state: u64,
     next_gaussian: Option<f64>,

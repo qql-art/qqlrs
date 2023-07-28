@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{fmt::Display, num::NonZeroU32, str::FromStr};
 
 use anyhow::Context;
 
@@ -29,6 +29,10 @@ pub struct Config {
     /// affects the output image size.
     #[clap(long, value_name = "WxH+X+Y")]
     pub viewport: Option<FractionalViewport>,
+
+    /// Chunks for parallel rendering.
+    #[clap(long, value_name = "WxH", default_value_t)]
+    pub chunks: Chunks,
 }
 
 /// A viewport/crop specification in fractional space, where both axes range from `0.0` to `1.0`.
@@ -52,6 +56,14 @@ impl Default for FractionalViewport {
 }
 
 impl FractionalViewport {
+    pub fn from_whlt(width: f64, height: f64, left: f64, top: f64) -> Self {
+        Self {
+            width,
+            height,
+            left,
+            top,
+        }
+    }
     pub fn width(&self) -> f64 {
         self.width
     }
@@ -90,6 +102,38 @@ impl FromStr for FractionalViewport {
             left: left.parse().context("Invalid x-offset")?,
             top: top.parse().context("Invalid y-offset")?,
         })
+    }
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct Chunks {
+    pub w: NonZeroU32,
+    pub h: NonZeroU32,
+}
+
+impl FromStr for Chunks {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (w, h) = s.split_once('x').context("Invalid format; expected WxH")?;
+        let w: u32 = w.parse().context("Invalid width")?;
+        let h: u32 = h.parse().context("Invalid height")?;
+        let w = NonZeroU32::try_from(w).context("Chunk width cannot be zero")?;
+        let h = NonZeroU32::try_from(h).context("Chunk height cannot be zero")?;
+        Ok(Chunks { w, h })
+    }
+}
+
+impl Default for Chunks {
+    fn default() -> Self {
+        let one = NonZeroU32::new(1).unwrap();
+        Chunks { w: one, h: one }
+    }
+}
+
+impl Display for Chunks {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}x{}", self.w, self.h)
     }
 }
 

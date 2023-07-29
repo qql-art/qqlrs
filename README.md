@@ -26,6 +26,15 @@ notable characteristics:
     don't suggest that outputs from a tweaked algorithm are "official" QQLs,
     please.)
 
+As a quick, imperfect performance comparison, rendering [QQL #237][qql237] at
+9600×12000px on my laptop:
+
+-   Canonical implementation: 31.57 seconds, 2.86 GB RAM
+-   This implementation, sequential:
+    9.84 seconds (3.2× faster), 1.31 GB RAM (2.2× smaller)
+-   This implementation, parallel (`--chunks 2x4`):
+    5.86 seconds **(5.4× faster)**, 1.32 GB RAM **(2.2× smaller)**
+
 [QQL]: https://qql.art
 [@wchargin]: https://wchargin.com
 

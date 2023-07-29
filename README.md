@@ -138,8 +138,8 @@ render just the top-left corner, the resulting image will be 1000px wide and
 A convenient way to visually find your viewport coordinates is to render a
 small version of your seed, import it into an image editor like GIMP, and
 rescale it to 1000×1000px (which will distort the aspect ratio; that's okay).
-Then, use the crop tool or to draw a rectangle over the viewport that you want
-to render, and just read off the position and size from the side menus. Divide
+Then, use the crop tool to draw a rectangle over the viewport that you want to
+render, and just read off the position and size from the side menus. Divide
 by 1000 to get the relative numbers. For example, with [QQL #237][qql237]:
 
 ![Screenshot of GIMP with a QQL resized to 1000×1000 and an active crop window,
@@ -177,11 +177,12 @@ circle needs to be painted in every chunk, I still see a 1.3× speedup! For QQLs
 that *are* better suited due to having circles well distributed, speedups on
 the order of 2–3× are more common.
 
-Use the **`--chunks <WxH>`** option to specify a grid layout, where `W` is the
-width of the grid and `H` is the height of the grid. Ideally, the product of
-`W` and `H` should be about as many threads as your CPU has. You can go above
-that number (like, `--chunks 16x16`) but this will probably make things slower.
-The default value is `--chunks 1x1`, which corresponds to no parallelism.
+Use the **`--chunks <WxH>`** option to specify a grid layout. For example,
+`--chunks 2x4` uses a grid 2 chunks wide and 4 chunks high. Ideally, the
+product of `W` and `H` should be about as many threads as your CPU has. You can
+exceed that number (like, `--chunks 16x16`) but this will probably make things
+slower. The default value is `--chunks 1x1`, which corresponds to no
+parallelism.
 
 In principle, you might see some seams or artifacts along the chunk boundaries.
 In practice, these tend to be entirely imperceptible, even with the aid of

@@ -1137,6 +1137,14 @@ fn paint(
     use std::sync::{Arc, Mutex};
     let outputs = Arc::new(Mutex::new(Vec::<Output>::new()));
 
+    // Compute and buffer all the outputs, then compose them together afterward.
+    //
+    // Instead of blocking on *all* chunks to complete, we could use an MPSC channel to let each
+    // thread send over its output as soon as it's done; then, the main thread could be
+    // concurrently waiting for them to arrive and composing them as they come in. This speeds
+    // things up by about 8% overall, but loses determinism (composition is probably not
+    // commutative, since we don't operate on exact pixel boundaries), and that feels like an
+    // unfortunate concession. Stick with the simple approach for now.
     std::thread::scope(|s| {
         for x in 0..hsteps {
             for y in 0..vsteps {

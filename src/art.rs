@@ -1071,6 +1071,16 @@ impl<'a> From<&'a FractionalViewport> for VirtualViewport {
     }
 }
 
+/// Computes the actual output canvas dimensions given a viewport and the width of the full virtual
+/// canvas (as passed to `--width`). E.g., if the viewport specifies a width of 25% and the full
+/// width is 1000px, the output width will be 250px.
+fn canvas_dimensions(fvp: &FractionalViewport, full_width: i32) -> (i32, i32) {
+    let full_height = ((full_width as i64) * 5 / 4) as i32;
+    let w = (f64::from(full_width) * fvp.width()).round() as i32;
+    let h = (f64::from(full_height) * fvp.height()).round() as i32;
+    (w, h)
+}
+
 impl PaintCtx {
     /// Assembles a new paint context.
     ///
@@ -1078,11 +1088,8 @@ impl PaintCtx {
     fn new(config: &Config, fvp: &FractionalViewport, canvas_width: i32) -> Self {
         let virtual_vp = VirtualViewport::from(fvp);
 
-        let canvas_height = canvas_width * 5 / 4;
-        let dt = DrawTarget::new(
-            (f64::from(canvas_width) * fvp.width()).round() as i32,
-            (f64::from(canvas_height) * fvp.height()).round() as i32,
-        );
+        let (w, h) = canvas_dimensions(fvp, canvas_width);
+        let dt = DrawTarget::new(w, h);
 
         let min_circle_steps = f64::max(8.0, config.min_circle_steps.unwrap_or(0) as f64);
         let scale_ratio = (canvas_width as f64 / VIRTUAL_W) as f32;
@@ -1111,12 +1118,10 @@ fn paint(
             p.scale = p.scale.max(w(0.00041));
         }
     }
-    let fvp = &config.viewport.as_ref().cloned().unwrap_or_default();
+    let full_fvp = &config.viewport.as_ref().cloned().unwrap_or_default();
 
     let hsteps: u32 = config.chunks.w.into();
     let vsteps: u32 = config.chunks.h.into();
-    let each_width = fvp.width() / hsteps as f64;
-    let each_height = fvp.height() / vsteps as f64;
 
     let background_color = {
         let spec = color_db
@@ -1126,8 +1131,8 @@ fn paint(
     };
 
     struct Output {
-        x: u32,
-        y: u32,
+        left_px: i32,
+        top_px: i32,
         // `DrawTarget` is `!Send`, so we break it down into its components.
         width: i32,
         height: i32,
@@ -1137,14 +1142,24 @@ fn paint(
     use std::sync::{Arc, Mutex};
     let outputs = Arc::new(Mutex::new(Vec::<Output>::new()));
 
+    let canvas_dims = canvas_dimensions(&full_fvp, canvas_width);
+    let chunk_origin = |chunk_x: u32, chunk_y: u32| -> (i32, i32) {
+        let (w, h) = canvas_dims;
+        let x = f64::from(w) * (f64::from(chunk_x) / f64::from(hsteps));
+        let y = f64::from(h) * (f64::from(chunk_y) / f64::from(vsteps));
+        (x.round() as i32, y.round() as i32)
+    };
+
     // Compute and buffer all the outputs, then compose them together afterward.
     //
     // Instead of blocking on *all* chunks to complete, we could use an MPSC channel to let each
     // thread send over its output as soon as it's done; then, the main thread could be
     // concurrently waiting for them to arrive and composing them as they come in. This speeds
     // things up by about 8% overall, but loses determinism (composition is probably not
-    // commutative, since we don't operate on exact pixel boundaries), and that feels like an
+    // commutative, since we don't operate on exact pixel boundaries*), and that feels like an
     // unfortunate concession. Stick with the simple approach for now.
+    //
+    // * TODO: We should be operating on exact pixel boundaries now. Reconsider?
     std::thread::scope(|s| {
         for x in 0..hsteps {
             for y in 0..vsteps {
@@ -1153,11 +1168,22 @@ fn paint(
                 let points = &points;
                 s.spawn(move || {
                     eprintln!("painting chunk ({}, {})", x, y);
+                    let (left_px, top_px) = chunk_origin(x, y);
+                    let (right_px, bottom_px) = chunk_origin(x + 1, y + 1);
+                    let (width_px, height_px) = (right_px - left_px, bottom_px - top_px);
+                    eprintln!(
+                        "painting chunk ({}, {}): {}x{}+{}+{}px",
+                        x, y, width_px, height_px, left_px, top_px
+                    );
+                    let (width_ratio, height_ratio) = (
+                        full_fvp.width() / f64::from(canvas_dims.0),
+                        full_fvp.height() / f64::from(canvas_dims.1),
+                    );
                     let fvp = FractionalViewport::from_whlt(
-                        each_width,
-                        each_height,
-                        fvp.left() + each_width * x as f64,
-                        fvp.top() + each_height * y as f64,
+                        f64::from(width_px) * width_ratio,
+                        f64::from(height_px) * height_ratio,
+                        f64::from(left_px) * width_ratio + full_fvp.left(),
+                        f64::from(top_px) * height_ratio + full_fvp.top(),
                     );
                     let mut pctx = PaintCtx::new(config, &fvp, canvas_width);
                     pctx.dt.fill_rect(
@@ -1179,8 +1205,8 @@ fn paint(
                         &mut rng,
                     );
                     let output = Output {
-                        x,
-                        y,
+                        left_px,
+                        top_px,
                         width: pctx.dt.width(),
                         height: pctx.dt.height(),
                         data: pctx.dt.into_inner(),
@@ -1192,21 +1218,16 @@ fn paint(
         }
     });
 
-    let mut pctx_final = PaintCtx::new(config, &fvp, canvas_width);
+    let mut pctx_final = PaintCtx::new(config, &full_fvp, canvas_width);
     for output in outputs.lock().expect("poison").iter() {
         let img = raqote::Image {
             width: output.width,
             height: output.height,
             data: output.data.as_slice(),
         };
-        // Note: we're potentially using subpixel calculations all over (e.g., if `Chunks` is `3x1`
-        // and the width does not divide `3`), but this seems to kind of just work out? There are
-        // some slight artifacts, but not visible to the (my) naked eye: you can see them if you
-        // pixel-diff a `3x1` and a `1x1` render and *really* blow out the contrast, but even
-        // overlaying that onto the composited image to draw the eye, I see nothing untoward.
         pctx_final.dt.draw_image_at(
-            pctx_final.dt.width() as f32 * output.x as f32 / hsteps as f32,
-            pctx_final.dt.height() as f32 * output.y as f32 / vsteps as f32,
+            output.left_px as f32,
+            output.top_px as f32,
             &img,
             &DrawOptions::new(),
         );

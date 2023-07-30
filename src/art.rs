@@ -1120,15 +1120,23 @@ fn paint(
     }
     let full_fvp = &config.viewport.as_ref().cloned().unwrap_or_default();
 
-    let hsteps: u32 = config.chunks.w.into();
-    let vsteps: u32 = config.chunks.h.into();
-    let num_chunks: usize = (hsteps * vsteps).try_into().expect("too many chunks!");
-
     let background_color = {
         let spec = color_db
             .color(color_scheme.background)
             .expect("invalid background");
         &Hsb(spec.hue, spec.sat, spec.bright).to_rgb().to_source()
+    };
+
+    let hsteps: u32 = config.chunks.w.into();
+    let vsteps: u32 = config.chunks.h.into();
+    let num_chunks: usize = (hsteps * vsteps).try_into().expect("too many chunks!");
+
+    let canvas_dims = canvas_dimensions(&full_fvp, canvas_width);
+    let chunk_origin = |chunk_x: u32, chunk_y: u32| -> (i32, i32) {
+        let (w, h) = canvas_dims;
+        let x = f64::from(w) * (f64::from(chunk_x) / f64::from(hsteps));
+        let y = f64::from(h) * (f64::from(chunk_y) / f64::from(vsteps));
+        (x.round() as i32, y.round() as i32)
     };
 
     struct Output {
@@ -1141,14 +1149,6 @@ fn paint(
         colors_used: HashSet<ColorKey>,
     }
     let (tx_output, rx_output) = std::sync::mpsc::sync_channel::<Output>(num_chunks);
-
-    let canvas_dims = canvas_dimensions(&full_fvp, canvas_width);
-    let chunk_origin = |chunk_x: u32, chunk_y: u32| -> (i32, i32) {
-        let (w, h) = canvas_dims;
-        let x = f64::from(w) * (f64::from(chunk_x) / f64::from(hsteps));
-        let y = f64::from(h) * (f64::from(chunk_y) / f64::from(vsteps));
-        (x.round() as i32, y.round() as i32)
-    };
 
     // Render each chunk in its own thread, compositing as we go on the main thread.
     std::thread::scope(|s| {

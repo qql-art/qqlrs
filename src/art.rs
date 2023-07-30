@@ -1122,6 +1122,7 @@ fn paint(
 
     let hsteps: u32 = config.chunks.w.into();
     let vsteps: u32 = config.chunks.h.into();
+    let num_chunks: usize = (hsteps * vsteps).try_into().expect("too many chunks!");
 
     let background_color = {
         let spec = color_db
@@ -1139,8 +1140,7 @@ fn paint(
         data: Vec<u32>,
         colors_used: HashSet<ColorKey>,
     }
-    use std::sync::{Arc, Mutex};
-    let outputs = Arc::new(Mutex::new(Vec::<Output>::new()));
+    let (tx_output, rx_output) = std::sync::mpsc::sync_channel::<Output>(num_chunks);
 
     let canvas_dims = canvas_dimensions(&full_fvp, canvas_width);
     let chunk_origin = |chunk_x: u32, chunk_y: u32| -> (i32, i32) {
@@ -1150,24 +1150,14 @@ fn paint(
         (x.round() as i32, y.round() as i32)
     };
 
-    // Compute and buffer all the outputs, then compose them together afterward.
-    //
-    // Instead of blocking on *all* chunks to complete, we could use an MPSC channel to let each
-    // thread send over its output as soon as it's done; then, the main thread could be
-    // concurrently waiting for them to arrive and composing them as they come in. This speeds
-    // things up by about 8% overall, but loses determinism (composition is probably not
-    // commutative, since we don't operate on exact pixel boundaries*), and that feels like an
-    // unfortunate concession. Stick with the simple approach for now.
-    //
-    // * TODO: We should be operating on exact pixel boundaries now. Reconsider?
+    // Render each chunk in its own thread, compositing as we go on the main thread.
     std::thread::scope(|s| {
         for x in 0..hsteps {
             for y in 0..vsteps {
                 let mut rng = rng.clone();
-                let outputs = outputs.clone();
                 let points = &points;
+                let tx_output = tx_output.clone();
                 s.spawn(move || {
-                    eprintln!("painting chunk ({}, {})", x, y);
                     let (left_px, top_px) = chunk_origin(x, y);
                     let (right_px, bottom_px) = chunk_origin(x + 1, y + 1);
                     let (width_px, height_px) = (right_px - left_px, bottom_px - top_px);
@@ -1212,28 +1202,31 @@ fn paint(
                         data: pctx.dt.into_inner(),
                         colors_used,
                     };
-                    outputs.lock().expect("poison").push(output);
+                    tx_output.send(output).unwrap();
                 });
             }
         }
-    });
-
-    let mut pctx_final = PaintCtx::new(config, &full_fvp, canvas_width);
-    for output in outputs.lock().expect("poison").iter() {
-        let img = raqote::Image {
-            width: output.width,
-            height: output.height,
-            data: output.data.as_slice(),
-        };
-        pctx_final.dt.draw_image_at(
-            output.left_px as f32,
-            output.top_px as f32,
-            &img,
-            &DrawOptions::new(),
-        );
-        colors_used.extend(&output.colors_used);
-    }
-    pctx_final.dt
+        drop(tx_output);
+        let mut pctx_final = PaintCtx::new(config, &full_fvp, canvas_width);
+        let mut chunks_composited = 0;
+        while let Ok(output) = rx_output.recv() {
+            let img = raqote::Image {
+                width: output.width,
+                height: output.height,
+                data: output.data.as_slice(),
+            };
+            pctx_final.dt.draw_image_at(
+                output.left_px as f32,
+                output.top_px as f32,
+                &img,
+                &DrawOptions::new(),
+            );
+            colors_used.extend(&output.colors_used);
+            chunks_composited += 1;
+        }
+        assert_eq!(chunks_composited, num_chunks, "missing some chunks");
+        pctx_final.dt
+    })
 }
 
 fn paint_onto_ctx(

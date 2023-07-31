@@ -22,9 +22,9 @@ notable characteristics:
 -   **Hackability:** This code is not obfuscated or minified. Structures and
     dataflow are explicit.There's no hidden or global state. Some components
     have unit tests. Try poking around: read it, play with it, dump
-    intermediate data structures, override variables, tweak it yourself. (Just
-    don't suggest that outputs from a tweaked algorithm are "official" QQLs,
-    please.)
+    intermediate data structures, write custom searchers, override variables,
+    tweak it yourself. (Just don't suggest that outputs from a tweaked
+    algorithm are "official" QQLs, please.)
 
 As a quick, imperfect performance comparison, rendering [QQL #237][qql237] at
 9600×12000px on my laptop:

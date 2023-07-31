@@ -41,7 +41,7 @@ As a quick, imperfect performance comparison, rendering [QQL #237][qql237] at
 ## Attribution
 
 The QQL project and the original art algorithm were created by Tyler Hobbs and
-Dandelion Wist. This implementation was written by @wchargin.
+Dandelion Indigo Lee. This implementation was written by @wchargin.
 
 This repository is dual-licensed under Apache 2.0 and MIT terms.
 

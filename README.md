@@ -20,7 +20,7 @@ notable characteristics:
     speed, quality, flexibility, and fun. See "Features" below.
 
 -   **Hackability:** This code is not obfuscated or minified. Structures and
-    dataflow are explicit.There's no hidden or global state. Some components
+    dataflow are explicit. There's no hidden or global state. Some components
     have unit tests. Try poking around: read it, play with it, dump
     intermediate data structures, write custom searchers, override variables,
     tweak it yourself. (Just don't suggest that outputs from a tweaked

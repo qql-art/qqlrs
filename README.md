@@ -26,17 +26,26 @@ notable characteristics:
     tweak it yourself. (Just don't suggest that outputs from a tweaked
     algorithm are "official" QQLs, please.)
 
-As a quick, imperfect performance comparison, rendering [QQL #237][qql237] at
-9600×12000px on my laptop:
+As a quick, imperfect performance comparison, rendering some QQLs at
+9600×12000px on my laptop, across the original JavaScript renderer, this
+implementation in sequential mode, and this implementation in parallel
+mode (`--chunks 2x4`):
 
--   Canonical implementation: 31.57 seconds, 2.86 GB RAM
--   This implementation, sequential:
-    9.84 seconds (3.2× faster), 1.31 GB RAM (2.2× smaller)
--   This implementation, parallel (`--chunks 2x4`):
-    5.86 seconds **(5.4× faster)**, 1.32 GB RAM **(2.2× smaller)**
+| Piece | Original | Sequential | Parallel | Speedup |
+|---|--:|--:|--:|--:|
+| [QQL #237][qql237] | 31.57s | 9.84s | 5.86s | **5.4× faster** |
+| [QQL #200][qql200] | 53.12s | 22.88s | 8.04s | **6.6× faster** |
+| [QQL #198][qql198] | 48.97s | 18.26s | 6.02s | **8.1× faster** |
+
+In addition to the speed improvements, this implementation tends to use
+about half as much RAM compared to the original.
 
 [QQL]: https://qql.art
 [@wchargin]: https://wchargin.com
+
+[qql237]: https://qql.art/token/0xda3c325ab45b30aeb476b026fe6a777443ca04f38e435bf353adffff10d0430d
+[qql200]: https://qql.art/token/0x83d1f3ef47a87d8d33fc4f73cbde3fd4f8f940fe23ae48e68f6bffff10620256
+[qql198]: https://qql.art/token/0x83d1f3ef47a87d8d33fc4f73cbde3fd4f8f940fe518da2975d6affff10c1a316
 
 ## Attribution
 
@@ -157,7 +166,6 @@ whose numeric coordinates are highlighted.][qql237-how-to-viewport]
 (If you prefer not to distort the aspect ratio, you can resize to 1000×1250px
 instead. Just divide the vertical coordinates by 1250 instead of 1000.)
 
-[qql237]: https://qql.art/token/0xda3c325ab45b30aeb476b026fe6a777443ca04f38e435bf353adffff10d0430d
 [qql237-how-to-viewport]: docs/img/qql237_how_to_viewport.png
 
 ### Multicore rendering

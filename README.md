@@ -11,10 +11,9 @@ notable characteristics:
     should look the same in both implementations (see "Fidelity expectations"
     for details).
 
--   **Performance:** Typically runs 1–3× faster than the original
-    implementation, depending on the seed. Also supports **multicore
-    rendering** of a single QQL, which can give an additional speedup factor of
-    2–3× on a machine with 4 physical cores.
+-   **Performance:** Between a faster core (sequential) implementation
+    and support for **multicore rendering** of a single QQL, this
+    renderer often runs 4–8× faster than the original.
 
 -   **Features:** This implementation has some additional knobs and dials, for
     speed, quality, flexibility, and fun. See "Features" below.

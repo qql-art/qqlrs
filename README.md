@@ -55,7 +55,8 @@ This repository is dual-licensed under Apache 2.0 and MIT terms.
 
 ## Getting started
 
-This project uses the standard [Rust][] toolchain. To build:
+This project uses the standard [Rust][] toolchain. You will need Rust 1.67.0 or
+newer. To build:
 
 ```shell
 $ cargo test

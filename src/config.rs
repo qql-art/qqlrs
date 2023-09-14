@@ -57,7 +57,12 @@ impl FromStr for Animation {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if let Some(n) = s.strip_prefix("points:") {
-            let step: u32 = n.parse().context("Invalid number of points per frame")?;
+            let step: u32 = n.parse().map_err(|e| {
+                anyhow::anyhow!("Invalid number of points per frame {:?}: {}", n, e)
+            })?;
+            if step == 0 {
+                anyhow::bail!("Must add at least 1 point per frame");
+            }
             return Ok(Animation::Points { step });
         }
         match s {

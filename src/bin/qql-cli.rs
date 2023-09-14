@@ -97,11 +97,25 @@ fn main() {
             Some(n) => eprintln!("wrote frame {}: {}", n, filename.display()),
         };
     };
-    qql::art::draw(
+
+    let render_data = qql::art::draw(
         opts.seed.as_bytes(),
         &color_db,
         &opts.config,
         opts.width,
         consume_frame,
     );
+
+    println!("num_points: {}", render_data.num_points);
+    let mut color_names: Vec<&str> = render_data
+        .colors_used
+        .iter()
+        .map(|&k| {
+            color_db
+                .color(k)
+                .map_or("<invalid color>", |c| c.name.as_str())
+        })
+        .collect();
+    color_names.sort();
+    println!("colors: {:?}", color_names);
 }

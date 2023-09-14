@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use raqote::{DrawOptions, DrawTarget, PathBuilder, SolidSource, Source, StrokeStyle};
 
 use super::color::{ColorDb, ColorKey, ColorSpec};
-use super::config::{Config, FractionalViewport};
+use super::config::{Animation, Config, FractionalViewport};
 use super::layouts::StartPointGroups;
 use super::math::{angle, cos, dist, modulo, pi, rescale, sin};
 use super::rand::Rng;
@@ -390,7 +390,7 @@ pub struct BullseyeGenerator {
     pub density_variance: f64,
     pub weighted_ring_options: Vec<(RingCount, f64)>,
 }
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub struct Bullseye {
     pub rings: RingCount,
     pub density: f64,
@@ -811,7 +811,7 @@ impl MarginChecker {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Point {
     pub position: (f64, f64),
     pub scale: f64,
@@ -821,7 +821,9 @@ pub struct Point {
 }
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct Hsb(pub f64, pub f64, pub f64);
-pub struct Points(pub Vec<Point>);
+
+pub struct Points(Vec<Point>);
+pub struct GroupSizes(Vec<usize>);
 
 impl Hsb {
     pub fn to_rgb(self) -> Rgb {
@@ -875,7 +877,7 @@ impl Points {
         sectors: &mut Sectors,
         colors_used: &mut HashSet<ColorKey>,
         rng: &mut Rng,
-    ) -> Points {
+    ) -> (Points, GroupSizes) {
         fn random_idx(len: usize, rng: &mut Rng) -> usize {
             rng.uniform(0.0, len as f64) as usize
         }
@@ -886,6 +888,7 @@ impl Points {
         let margin_checker = MarginChecker::from_traits(traits);
 
         let mut all_points = Vec::new();
+        let mut group_sizes = Vec::with_capacity(grouped_flow_lines.0.len());
         for group in grouped_flow_lines.0 {
             if rng.odds(color_change_odds.group) {
                 primary_color_idx =
@@ -894,6 +897,7 @@ impl Points {
                     pick_next_color(&color_scheme.secondary_seq, secondary_color_idx, rng);
                 base_bullseye_spec = bullseye_generator.next(rng);
             }
+            let old_size = all_points.len();
             Self::build_group(
                 &mut all_points,
                 color_db,
@@ -911,8 +915,10 @@ impl Points {
                 colors_used,
                 rng,
             );
+            let new_size = all_points.len();
+            group_sizes.push(new_size - old_size);
         }
-        Points(all_points)
+        (Points(all_points), GroupSizes(group_sizes))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1130,13 +1136,30 @@ impl PaintCtx {
     }
 }
 
+#[derive(Debug, Copy, Clone)]
+enum Background {
+    Transparent,
+    Opaque,
+}
+
+/// As normal points are painted and generate splatter points, should they be painted immediately
+/// (for a one-shot render) or pushed into a queue to be rendered later (for incremental
+/// rendering)?
+enum SplatterSink<'a> {
+    Immediate,
+    Deferred(&'a mut Vec<Point>),
+}
+
 fn paint(
     canvas_width: i32,
+    background: Background,
     traits: &Traits,
     color_db: &ColorDb,
     config: &Config,
-    points: &[Point],
     stack_offset: &StackOffset,
+    normal_points: &[Point],
+    splatter_sink: &mut SplatterSink,
+    extra_splatter_points: &[Point],
     color_scheme: &ColorScheme,
     colors_used: &mut HashSet<ColorKey>,
     rng: &mut Rng,
@@ -1172,7 +1195,13 @@ fn paint(
         height: i32,
         data: Vec<u32>,
         colors_used: HashSet<ColorKey>,
+        splatter_points: Vec<Point>,
+        rng: Rng,
     }
+    let splatter_immediate = match splatter_sink {
+        SplatterSink::Immediate => true,
+        SplatterSink::Deferred(_) => false,
+    };
     let (tx_output, rx_output) = std::sync::mpsc::sync_channel::<Output>(num_chunks);
 
     // Render each chunk in its own thread, compositing as we go on the main thread.
@@ -1200,14 +1229,36 @@ fn paint(
                         f64::from(top_px) * height_ratio + full_fvp.top(),
                     );
                     let mut pctx = PaintCtx::new(config, &fvp, canvas_width);
-                    pctx.dt.clear(background_color);
+                    match background {
+                        Background::Transparent => (),
+                        Background::Opaque => pctx.dt.clear(background_color),
+                    };
                     let mut colors_used = HashSet::new();
-                    paint_onto_ctx(
+                    let mut new_splatter_points = Vec::new();
+                    paint_normal_points(
                         &mut pctx,
                         traits,
-                        color_db,
-                        points,
+                        normal_points,
                         stack_offset,
+                        color_scheme,
+                        &mut new_splatter_points,
+                        &mut rng,
+                    );
+                    if splatter_immediate {
+                        paint_splatter_points(
+                            &mut pctx,
+                            color_db,
+                            new_splatter_points.as_slice(),
+                            color_scheme,
+                            &mut colors_used,
+                            &mut rng,
+                        );
+                        new_splatter_points.clear();
+                    }
+                    paint_splatter_points(
+                        &mut pctx,
+                        color_db,
+                        extra_splatter_points,
                         color_scheme,
                         &mut colors_used,
                         &mut rng,
@@ -1219,6 +1270,8 @@ fn paint(
                         height: pctx.dt.height(),
                         data: pctx.dt.into_inner(),
                         colors_used,
+                        splatter_points: new_splatter_points,
+                        rng,
                     };
                     tx_output.send(output).unwrap();
                 });
@@ -1227,7 +1280,27 @@ fn paint(
         drop(tx_output);
         let mut pctx_final = PaintCtx::new(config, &full_fvp, canvas_width);
         let mut chunks_composited = 0;
+        let mut expected_splatter_points = None;
         while let Ok(output) = rx_output.recv() {
+            if chunks_composited == 0 {
+                *rng = output.rng;
+                match splatter_sink {
+                    SplatterSink::Immediate => assert!(output.splatter_points.is_empty()),
+                    SplatterSink::Deferred(sink) => {
+                        sink.extend_from_slice(output.splatter_points.as_slice());
+                    }
+                }
+                expected_splatter_points = Some(output.splatter_points);
+            } else {
+                if output.rng != *rng {
+                    panic!("rng state mismatch");
+                }
+                if cfg!(debug)
+                    && output.splatter_points != *expected_splatter_points.as_ref().unwrap()
+                {
+                    panic!("new splatter points mismatch");
+                }
+            }
             let img = raqote::Image {
                 width: output.width,
                 height: output.height,
@@ -1245,36 +1318,6 @@ fn paint(
         assert_eq!(chunks_composited, num_chunks, "missing some chunks");
         pctx_final.dt
     })
-}
-
-fn paint_onto_ctx(
-    pctx: &mut PaintCtx,
-    traits: &Traits,
-    color_db: &ColorDb,
-    points: &[Point],
-    stack_offset: &StackOffset,
-    color_scheme: &ColorScheme,
-    colors_used: &mut HashSet<ColorKey>,
-    rng: &mut Rng,
-) {
-    let mut splatter_points = Vec::new();
-    paint_normal_points(
-        pctx,
-        traits,
-        points,
-        stack_offset,
-        color_scheme,
-        &mut splatter_points,
-        rng,
-    );
-    paint_splatter_points(
-        pctx,
-        color_db,
-        splatter_points.as_mut_slice(),
-        color_scheme,
-        colors_used,
-        rng,
-    );
 }
 
 fn paint_normal_points(
@@ -1330,12 +1373,12 @@ fn paint_normal_points(
 fn paint_splatter_points(
     pctx: &mut PaintCtx,
     color_db: &ColorDb,
-    splatter_points: &mut [Point],
+    splatter_points: &[Point],
     color_scheme: &ColorScheme,
     colors_used: &mut HashSet<ColorKey>,
     rng: &mut Rng,
 ) {
-    for mut p in splatter_points {
+    for p in splatter_points {
         let splatter_color = *rng.choice(&color_scheme.splatter_choices);
         let final_color = spec_to_color(
             splatter_color,
@@ -1343,6 +1386,7 @@ fn paint_splatter_points(
             colors_used,
             rng,
         );
+        let mut p = p.clone();
         p.primary_color = final_color;
         p.secondary_color = final_color;
         p.bullseye.density = f64::max(0.17, p.bullseye.density * 0.7);
@@ -1544,13 +1588,22 @@ fn draw_clean_circle(
     );
 }
 
-pub struct Render {
-    pub dt: DrawTarget,
-    pub num_points: u64,
+pub struct Frame<'a> {
+    pub dt: &'a DrawTarget,
+    pub number: Option<u32>,
+}
+pub struct RenderData {
+    pub num_points: usize,
     pub colors_used: HashSet<ColorKey>,
 }
 
-pub fn draw(seed: &[u8; 32], color_db: &ColorDb, config: &Config, canvas_width: i32) -> Render {
+pub fn draw<F: FnMut(Frame)>(
+    seed: &[u8; 32],
+    color_db: &ColorDb,
+    config: &Config,
+    canvas_width: i32,
+    mut consume_frame: F,
+) -> RenderData {
     let traits = Traits::from_seed(seed);
     let mut rng = Rng::from_seed(&seed[..]);
     eprintln!("initialized traits");
@@ -1571,7 +1624,7 @@ pub fn draw(seed: &[u8; 32], color_db: &ColorDb, config: &Config, canvas_width: 
         GroupedFlowLines::build(flow_field, ignore_flow_field, start_points, &mut rng);
     let mut sectors: Sectors = build_sectors(&config);
     let mut colors_used: HashSet<ColorKey> = HashSet::new();
-    let mut points = Points::build(
+    let (mut points, group_sizes) = Points::build(
         &traits,
         color_db,
         grouped_flow_lines,
@@ -1585,24 +1638,141 @@ pub fn draw(seed: &[u8; 32], color_db: &ColorDb, config: &Config, canvas_width: 
         &mut rng,
     );
     eprintln!("laid out points");
-    let num_points = points.0.len() as u64;
+    let num_points = points.0.len();
 
-    adjust_draw_radius(&config, points.0.as_mut_slice());
+    let () = adjust_draw_radius(&config, points.0.as_mut_slice());
     let stack_offset = StackOffset::build(&traits, &mut rng);
-    let dt = paint(
-        canvas_width,
-        &traits,
-        color_db,
-        &config,
-        &points.0,
-        &stack_offset,
-        &color_scheme,
-        &mut colors_used,
-        &mut rng,
-    );
-    eprintln!("drew points");
-    Render {
-        dt,
+
+    let batch_sizes = match config.animate {
+        Animation::None => None,
+        Animation::Groups => Some(group_sizes.0),
+        Animation::Points { step } => {
+            let step = step as usize;
+            let (n_groups, remainder) = (num_points / step, num_points % step);
+            let mut result = vec![step; n_groups];
+            if remainder > 0 {
+                result.push(remainder);
+            }
+            Some(result)
+        }
+    };
+
+    match batch_sizes {
+        None => {
+            let dt = paint(
+                canvas_width,
+                Background::Opaque,
+                &traits,
+                color_db,
+                &config,
+                &stack_offset,
+                points.0.as_slice(),
+                &mut SplatterSink::Immediate,
+                &[], // no extra splatter points
+                &color_scheme,
+                &mut colors_used,
+                &mut rng,
+            );
+            consume_frame(Frame {
+                dt: &dt,
+                number: None,
+            });
+            eprintln!("drew points");
+        }
+
+        Some(batch_sizes) => {
+            let old_rng = rng.clone();
+            let mut splatter_points = Vec::new();
+            let mut fb = paint(
+                canvas_width,
+                Background::Opaque,
+                &traits,
+                color_db,
+                &config,
+                &stack_offset,
+                &[], // no normal points (background only)
+                &mut SplatterSink::Deferred(&mut splatter_points),
+                &[], // no extra splatter points
+                &color_scheme,
+                &mut colors_used,
+                &mut rng,
+            );
+            if old_rng != rng {
+                panic!("painting background changed rng");
+            }
+            drop(old_rng);
+            if !splatter_points.is_empty() {
+                panic!("painting background produced splatter points");
+            }
+
+            let mut frame_number = 0;
+            consume_frame(Frame {
+                dt: &fb,
+                number: Some(frame_number),
+            });
+            frame_number += 1;
+
+            let mut emit_incremental_frame = |dt: &DrawTarget| {
+                let img = raqote::Image {
+                    width: dt.width(),
+                    height: dt.height(),
+                    data: dt.get_data(),
+                };
+                assert_eq!((dt.width(), dt.height()), (fb.width(), fb.height()));
+                fb.draw_image_at(0.0, 0.0, &img, &DrawOptions::new());
+                consume_frame(Frame {
+                    dt: &fb,
+                    number: Some(frame_number),
+                });
+                frame_number += 1;
+            };
+
+            let mut points = points.0.as_slice();
+            for size in batch_sizes {
+                let (batch, rest) = points.split_at(size);
+                let dt = paint(
+                    canvas_width,
+                    Background::Transparent,
+                    &traits,
+                    color_db,
+                    &config,
+                    &stack_offset,
+                    batch,
+                    &mut SplatterSink::Deferred(&mut splatter_points),
+                    &[], // no extra splatter points
+                    &color_scheme,
+                    &mut colors_used,
+                    &mut rng,
+                );
+                emit_incremental_frame(&dt);
+                points = rest;
+            }
+
+            if !splatter_points.is_empty() {
+                let mut splatter_sentinel = Vec::new();
+                let dt = paint(
+                    canvas_width,
+                    Background::Transparent,
+                    &traits,
+                    color_db,
+                    &config,
+                    &stack_offset,
+                    &[], // no normal points
+                    &mut SplatterSink::Deferred(&mut splatter_sentinel),
+                    splatter_points.as_slice(),
+                    &color_scheme,
+                    &mut colors_used,
+                    &mut rng,
+                );
+                if !splatter_sentinel.is_empty() {
+                    panic!("painting splatter points produced more");
+                }
+                emit_incremental_frame(&dt);
+            }
+        }
+    }
+
+    RenderData {
         num_points,
         colors_used,
     }

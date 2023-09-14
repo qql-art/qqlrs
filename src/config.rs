@@ -33,6 +33,52 @@ pub struct Config {
     /// Chunks for parallel rendering.
     #[clap(long, value_name = "WxH", default_value_t)]
     pub chunks: Chunks,
+
+    /// Output multiple frames showing the construction of the piece.
+    ///
+    /// May be `none` for no animation, `groups` to paint one flow line group at a time, or
+    /// `points:N` (where `N` is a positive integer) to show paint `N` points at a time.
+    #[clap(long, default_value_t)]
+    pub animate: Animation,
+}
+
+#[derive(Default, Debug, Clone)]
+pub enum Animation {
+    #[default]
+    None,
+    Groups,
+    Points {
+        step: u32,
+    },
+}
+
+impl FromStr for Animation {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Some(n) = s.strip_prefix("points:") {
+            let step: u32 = n.parse().context("Invalid number of points per frame")?;
+            return Ok(Animation::Points { step });
+        }
+        match s {
+            "none" => Ok(Animation::None),
+            "groups" => Ok(Animation::Groups),
+            "points" => {
+                anyhow::bail!("Must specify how many points to add per frame, like \"points:100\"")
+            }
+            _ => anyhow::bail!("Invalid animation spec"),
+        }
+    }
+}
+
+impl Display for Animation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Animation::None => f.write_str("none"),
+            Animation::Groups => f.write_str("groups"),
+            Animation::Points { step } => write!(f, "points:{}", step),
+        }
+    }
 }
 
 /// A viewport/crop specification in fractional space, where both axes range from `0.0` to `1.0`.

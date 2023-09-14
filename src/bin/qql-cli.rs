@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::fmt::{Debug, Display};
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -55,11 +56,9 @@ impl Display for Seed {
 
 fn main() {
     let opts = Opts::parse();
-
     let color_db = qql::color::ColorDb::from_bundle();
-    let dt = qql::art::draw(opts.seed.as_bytes(), &color_db, &opts.config, opts.width).dt;
 
-    let filename = if let Some(f) = opts.output_filename {
+    let base_filepath = if let Some(f) = opts.output_filename {
         f
     } else {
         let mut basename = opts.seed.to_string();
@@ -72,9 +71,37 @@ fn main() {
         basename.push_str(".png");
         PathBuf::from(basename)
     };
-    if let Err(e) = dt.write_png(&filename) {
-        eprintln!("Failed to write PNG to {}: {}", filename.display(), e);
-        std::process::exit(1);
-    }
-    eprintln!("wrote png: {}", filename.display());
+
+    let consume_frame = |frame: qql::art::Frame| {
+        let filename = match frame.number {
+            None => base_filepath.clone(),
+            Some(n) => {
+                let mut filename = base_filepath
+                    .file_stem()
+                    .unwrap_or(OsStr::new(""))
+                    .to_owned();
+                filename.push(format!("{:04}.", n));
+                let mut filename = PathBuf::from(filename);
+                if let Some(ext) = base_filepath.extension() {
+                    filename.set_extension(ext);
+                }
+                base_filepath.with_file_name(filename)
+            }
+        };
+        if let Err(e) = frame.dt.write_png(&filename) {
+            eprintln!("Failed to write PNG to {}: {}", filename.display(), e);
+            std::process::exit(1);
+        }
+        match frame.number {
+            None => eprintln!("wrote png: {}", filename.display()),
+            Some(n) => eprintln!("wrote frame {}: {}", n, filename.display()),
+        };
+    };
+    qql::art::draw(
+        opts.seed.as_bytes(),
+        &color_db,
+        &opts.config,
+        opts.width,
+        consume_frame,
+    );
 }

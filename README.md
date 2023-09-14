@@ -112,6 +112,7 @@ $ cargo run --release -- <seed> [<options>...]
 
 -   [Viewport restriction, `--viewport`](#viewport-restriction)
 -   [Multicore rendering, `--chunks`](#multicore-rendering)
+-   [Incremental animations, `--animate`](#incremental-animations)
 -   [Higher quality circles, `--min-circle-steps`](#higher-quality-circles)
 -   [Fast collision checking, `--fast-collisions`](#fast-collision-checking)
 -   [Radius inflation at paint time, `--inflate-draw-radius`](#radius-inflation-at-paint-time)
@@ -206,6 +207,62 @@ In practice, these tend to be entirely imperceptible, even with the aid of
 digital analysis. If you find otherwise, let me know! I'd love to take a look.
 
 [qql026]: https://qql.art/token/0x01f93c96448ebd097a1a2a5358a4b3550ad0354c5e0fbf8464caffff11280ac8
+
+### Incremental animations
+
+> **TL;DR:** Pass `--animate points:100` to render a sequence of images as each
+> 100 points are added, or `--animate groups` to render a sequence of images as
+> each flow line group is added.
+
+By default, rendering a QQL will create just one image: the final QQL. By
+passing the **`--animate <ANIMATE>`** flag, you can instead create a *sequence*
+of images that show the process of the QQL be drawn, circle by circle! The very
+first image will be blank, and each image after that will have more and more
+circles, until the last image, which is the complete QQL.
+
+If you pass **`--animate points:N`**, where `N` is a positive integer (e.g.,
+`--animate points:100`), each image will have up to `N` points more than the
+previous. If you pass **`--animate groups`**, each image will have one
+additional *flow line group*, which is a collection of points that were created
+together in the algorithm and have similar properties. Both modes, and
+especially `--animate groups`, can help you understand how the algorithm works.
+
+Note that some points may be just barely off screen, or may have very small (or
+negative) radii. Therefore, some frames may be identical to their predecessors.
+
+This example shows the flow line groups of QQL #53:
+
+<p align="center">
+  <img src="docs/img/qql053_groups.gif" alt="Incremental render of QQL #53, showing one group at a time." />
+</p>
+
+When rendering for animation, the interpretation of the output path parameter
+(`-o`) changes a bit: frame numbers are added to each image before the file
+extension, zero-padded to 4 places. So, if you pass `-o build/out.png`, images
+will be created at `build/out0000.png`, `build/out0001.png`, and so on.
+
+If you want to convert this image sequence to a video file for sharing, you can
+use [FFmpeg][]. For example, if you rendered `-o build/out.png` and want to
+convert that to an MP4 video `build/out.mp4`, you can run:
+
+```
+ffmpeg -framerate 30 -i build/out%04d.png -vf format=yuv420p build/out.mp4
+```
+
+(The `-vf format=yuv420p` arguments instruct FFmpeg to use YUV 4:2:0 chroma
+subsampling; this slightly degrades color quality, but makes the video
+compatible with more players.)
+
+Rendering with `--animate` is *much faster* than successively re-rendering
+QQLs. All the layout information only has to be computed once, and each frame
+only needs to incrementally render the new points. Most of the time goes to
+actually writing PNG files to disk. Exact speed of course depends on a lot of
+factors, but I typically see around **30 frames per second** on my laptop.
+
+You can also explicitly pass **`--animate none`**, which is the same as the
+default behavior.
+
+[ffmpeg]: https://ffmpeg.org
 
 ### Higher quality circles
 

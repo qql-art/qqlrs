@@ -1052,6 +1052,22 @@ fn adjust_draw_radius(config: &Config, points: &mut [Point]) {
     }
 }
 
+/// For [`ColorMode::Stacked`] pieces, this is `Some((dx, dy))`; for other pieces, this is `None`.
+#[derive(Debug, Copy, Clone)]
+struct StackOffset(Option<(f64, f64)>);
+
+impl StackOffset {
+    fn build(traits: &Traits, rng: &mut Rng) -> Self {
+        match traits.color_mode {
+            ColorMode::Stacked => Self(Some((
+                rng.gauss(0.0, w(0.0013)),
+                rng.gauss(0.0, w(0.0013)).abs(),
+            ))),
+            _ => Self(None),
+        }
+    }
+}
+
 struct PaintCtx {
     dt: DrawTarget,
     min_circle_steps: f64,
@@ -1120,6 +1136,7 @@ fn paint(
     color_db: &ColorDb,
     config: &Config,
     points: &[Point],
+    stack_offset: &StackOffset,
     color_scheme: &ColorScheme,
     colors_used: &mut HashSet<ColorKey>,
     rng: &mut Rng,
@@ -1190,6 +1207,7 @@ fn paint(
                         traits,
                         color_db,
                         points,
+                        stack_offset,
                         color_scheme,
                         &mut colors_used,
                         &mut rng,
@@ -1234,14 +1252,11 @@ fn paint_onto_ctx(
     traits: &Traits,
     color_db: &ColorDb,
     points: &[Point],
+    stack_offset: &StackOffset,
     color_scheme: &ColorScheme,
     colors_used: &mut HashSet<ColorKey>,
     rng: &mut Rng,
 ) {
-    let stack_offset = match traits.color_mode {
-        ColorMode::Stacked => Some((rng.gauss(0.0, w(0.0013)), rng.gauss(0.0, w(0.0013)).abs())),
-        _ => None,
-    };
     let is_zebra = matches!(traits.color_mode, ColorMode::Zebra);
 
     let mut splatter_points = Vec::new();
@@ -1261,7 +1276,7 @@ fn paint_onto_ctx(
         if rng.odds(color_scheme.splatter_odds * splatter_odds_adjustment) {
             splatter_points.push(p.clone());
         }
-        if let Some((xoff, yoff)) = stack_offset {
+        if let Some((xoff, yoff)) = stack_offset.0 {
             draw_ring_dot(
                 &Point {
                     position: (x + xoff, y + yoff),
@@ -1538,12 +1553,14 @@ pub fn draw(seed: &[u8; 32], color_db: &ColorDb, config: &Config, canvas_width: 
     let num_points = points.0.len() as u64;
 
     adjust_draw_radius(&config, points.0.as_mut_slice());
+    let stack_offset = StackOffset::build(&traits, &mut rng);
     let dt = paint(
         canvas_width,
         &traits,
         color_db,
         &config,
         &points.0,
+        &stack_offset,
         &color_scheme,
         &mut colors_used,
         &mut rng,

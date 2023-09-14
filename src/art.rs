@@ -848,13 +848,16 @@ impl Hsb {
 pub struct Rgb(pub f64, pub f64, pub f64);
 
 impl Rgb {
-    pub fn to_source(self) -> Source<'static> {
-        Source::Solid(SolidSource {
+    pub fn to_solid_source(self) -> SolidSource {
+        SolidSource {
             r: self.0 as u8,
             g: self.1 as u8,
             b: self.2 as u8,
             a: 255,
-        })
+        }
+    }
+    pub fn to_source(self) -> Source<'static> {
+        Source::Solid(self.to_solid_source())
     }
 }
 
@@ -1124,7 +1127,9 @@ fn paint(
         let spec = color_db
             .color(color_scheme.background)
             .expect("invalid background");
-        &Hsb(spec.hue, spec.sat, spec.bright).to_rgb().to_source()
+        Hsb(spec.hue, spec.sat, spec.bright)
+            .to_rgb()
+            .to_solid_source()
     };
 
     let hsteps: u32 = config.chunks.w.into();
@@ -1176,14 +1181,7 @@ fn paint(
                         f64::from(top_px) * height_ratio + full_fvp.top(),
                     );
                     let mut pctx = PaintCtx::new(config, &fvp, canvas_width);
-                    pctx.dt.fill_rect(
-                        0.0,
-                        0.0,
-                        pctx.dt.width() as f32,
-                        pctx.dt.height() as f32,
-                        background_color,
-                        &DrawOptions::new(),
-                    );
+                    pctx.dt.clear(background_color);
                     let mut colors_used = HashSet::new();
                     paint_onto_ctx(
                         &mut pctx,

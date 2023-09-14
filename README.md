@@ -8,15 +8,15 @@ notable characteristics:
 
 -   **Compatibility:** This implementation is entropy-compatible with the
     original, using the same RNG algorithms and sampling. A given QQL seed
-    should look the same in both implementations (see "Fidelity expectations"
-    for details).
+    should look the same in both implementations (see ["Fidelity
+    expectations"][fidelity] for details).
 
 -   **Performance:** Between a faster core (sequential) implementation
     and support for **multicore rendering** of a single QQL, this
     renderer often runs 4–8× faster than the original.
 
 -   **Features:** This implementation has some additional knobs and dials, for
-    speed, quality, flexibility, and fun. See "Features" below.
+    speed, quality, flexibility, and fun. See ["Features"][features] below.
 
 -   **Hackability:** This code is not obfuscated or minified. Structures and
     dataflow are explicit. There's no hidden or global state. Some components
@@ -107,6 +107,7 @@ $ cargo run --release -- <seed> [<options>...]
 [qql085]: https://qql.art/token/0x7d265f38b1d92b48997620b050cf0c534e1908fc203f633b2894ffff10e10c55
 
 ## Features
+[features]: #features
 
 *Jump:*
 
@@ -337,6 +338,7 @@ moving along the flow field.][mp-negspace-img]
 > actually canonical QQLs!
 
 ## Fidelity expectations
+[fidelity]: #fidelity-expectations
 
 The output of this renderer is interpreted to match the canonical outputs "as
 well as the human eye can see at typical resolutions". This loosely defined

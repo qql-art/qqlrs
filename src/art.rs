@@ -1044,6 +1044,14 @@ fn perturb_color(color: Hsb, spec: &ColorSpec, rng: &mut Rng) -> Hsb {
     Hsb(hue, sat, bright)
 }
 
+fn adjust_draw_radius(config: &Config, points: &mut [Point]) {
+    if config.inflate_draw_radius {
+        for p in points {
+            p.scale = p.scale.max(w(0.00041));
+        }
+    }
+}
+
 struct PaintCtx {
     dt: DrawTarget,
     min_circle_steps: f64,
@@ -1111,16 +1119,11 @@ fn paint(
     traits: &Traits,
     color_db: &ColorDb,
     config: &Config,
-    mut points: Points,
+    points: &[Point],
     color_scheme: &ColorScheme,
     colors_used: &mut HashSet<ColorKey>,
     rng: &mut Rng,
 ) -> DrawTarget {
-    if config.inflate_draw_radius {
-        for p in &mut points.0 {
-            p.scale = p.scale.max(w(0.00041));
-        }
-    }
     let full_fvp = &config.viewport.as_ref().cloned().unwrap_or_default();
 
     let background_color = {
@@ -1160,7 +1163,6 @@ fn paint(
         for x in 0..hsteps {
             for y in 0..vsteps {
                 let mut rng = rng.clone();
-                let points = &points;
                 let tx_output = tx_output.clone();
                 s.spawn(move || {
                     let (left_px, top_px) = chunk_origin(x, y);
@@ -1187,7 +1189,7 @@ fn paint(
                         &mut pctx,
                         traits,
                         color_db,
-                        &points,
+                        points,
                         color_scheme,
                         &mut colors_used,
                         &mut rng,
@@ -1231,7 +1233,7 @@ fn paint_onto_ctx(
     pctx: &mut PaintCtx,
     traits: &Traits,
     color_db: &ColorDb,
-    points: &Points,
+    points: &[Point],
     color_scheme: &ColorScheme,
     colors_used: &mut HashSet<ColorKey>,
     rng: &mut Rng,
@@ -1244,7 +1246,7 @@ fn paint_onto_ctx(
 
     let mut splatter_points = Vec::new();
 
-    for p in &points.0 {
+    for p in points {
         let (x, y) = p.position;
 
         // splatter is much more likely closer to the splatter center
@@ -1519,7 +1521,7 @@ pub fn draw(seed: &[u8; 32], color_db: &ColorDb, config: &Config, canvas_width: 
         GroupedFlowLines::build(flow_field, ignore_flow_field, start_points, &mut rng);
     let mut sectors: Sectors = build_sectors(&config);
     let mut colors_used: HashSet<ColorKey> = HashSet::new();
-    let points = Points::build(
+    let mut points = Points::build(
         &traits,
         color_db,
         grouped_flow_lines,
@@ -1534,12 +1536,14 @@ pub fn draw(seed: &[u8; 32], color_db: &ColorDb, config: &Config, canvas_width: 
     );
     eprintln!("laid out points");
     let num_points = points.0.len() as u64;
+
+    adjust_draw_radius(&config, points.0.as_mut_slice());
     let dt = paint(
         canvas_width,
         &traits,
         color_db,
         &config,
-        points,
+        &points.0,
         &color_scheme,
         &mut colors_used,
         &mut rng,

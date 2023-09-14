@@ -1257,10 +1257,36 @@ fn paint_onto_ctx(
     colors_used: &mut HashSet<ColorKey>,
     rng: &mut Rng,
 ) {
-    let is_zebra = matches!(traits.color_mode, ColorMode::Zebra);
-
     let mut splatter_points = Vec::new();
+    paint_normal_points(
+        pctx,
+        traits,
+        points,
+        stack_offset,
+        color_scheme,
+        &mut splatter_points,
+        rng,
+    );
+    paint_splatter_points(
+        pctx,
+        color_db,
+        splatter_points.as_mut_slice(),
+        color_scheme,
+        colors_used,
+        rng,
+    );
+}
 
+fn paint_normal_points(
+    pctx: &mut PaintCtx,
+    traits: &Traits,
+    points: &[Point],
+    stack_offset: &StackOffset,
+    color_scheme: &ColorScheme,
+    splatter_points: &mut Vec<Point>,
+    rng: &mut Rng,
+) {
+    let is_zebra = matches!(traits.color_mode, ColorMode::Zebra);
     for p in points {
         let (x, y) = p.position;
 
@@ -1299,7 +1325,16 @@ fn paint_onto_ctx(
             draw_ring_dot(&p, pctx, rng);
         }
     }
+}
 
+fn paint_splatter_points(
+    pctx: &mut PaintCtx,
+    color_db: &ColorDb,
+    splatter_points: &mut [Point],
+    color_scheme: &ColorScheme,
+    colors_used: &mut HashSet<ColorKey>,
+    rng: &mut Rng,
+) {
     for mut p in splatter_points {
         let splatter_color = *rng.choice(&color_scheme.splatter_choices);
         let final_color = spec_to_color(

@@ -36,7 +36,8 @@ impl FromStr for Seed {
             s = &s[2..];
         }
         let bytes: Vec<u8> = hex::decode(s)?;
-        let bytes: [u8; 32] = <[u8; 32]>::try_from(bytes).unwrap();
+        let bytes: [u8; 32] = <[u8; 32]>::try_from(bytes)
+            .map_err(|e| anyhow::anyhow!("Seed must be 32 bytes; got {}", e.len()))?;
         Ok(Seed(bytes))
     }
 }

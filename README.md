@@ -59,7 +59,7 @@ This project uses the standard [Rust][] toolchain. You will need Rust 1.67.0 or
 newer. To build:
 
 ```shell
-$ cargo test
+$ cargo test --release
 $ cargo build --release
 ```
 

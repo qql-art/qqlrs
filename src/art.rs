@@ -552,10 +552,14 @@ impl FlowField {
         ff
     }
 
+    fn constant_flow_field(theta: f64) -> Box<[[f64; FLOW_FIELD_ROWS]; FLOW_FIELD_COLS]> {
+        let vec_of_arrays = vec![[theta; FLOW_FIELD_ROWS]; FLOW_FIELD_COLS];
+        let slice_of_arrays = vec_of_arrays.into_boxed_slice();
+        slice_of_arrays.try_into().unwrap()
+    }
+
     fn raw_linear(default_theta: f64) -> Self {
-        FlowField(Box::new(
-            [[default_theta; FLOW_FIELD_ROWS]; FLOW_FIELD_COLS],
-        ))
+        FlowField(Self::constant_flow_field(default_theta))
     }
 
     fn raw_circular(
@@ -574,7 +578,7 @@ impl FlowField {
         }
         rot = pi(rot);
 
-        let mut flow_points = Box::new([[0.0; FLOW_FIELD_ROWS]; FLOW_FIELD_COLS]);
+        let mut flow_points = Self::constant_flow_field(0.0);
 
         let cx = {
             let fst = rng.uniform(w(0.0), w(1.0));

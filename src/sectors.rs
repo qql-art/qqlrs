@@ -41,7 +41,12 @@ impl Sectors {
     pub fn new(config: &Config, left: f64, right: f64, top: f64, bottom: f64) -> Self {
         let ix = Indexer::new(f64::min(left, right), f64::max(left, right));
         let iy = Indexer::new(f64::min(top, bottom), f64::max(top, bottom));
-        let sectors = Box::new(std::array::from_fn(|_| std::array::from_fn(|_| Vec::new())));
+        let sectors = {
+            const EMPTY_SECTOR: Vec<Collider> = Vec::new();
+            let vec_of_arrays = vec![[EMPTY_SECTOR; NUM_SECTORS]; NUM_SECTORS];
+            let slice_of_arrays = vec_of_arrays.into_boxed_slice();
+            slice_of_arrays.try_into().unwrap()
+        };
         Sectors {
             fast_collisions: config.fast_collisions,
             ix,

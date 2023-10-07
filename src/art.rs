@@ -1282,6 +1282,22 @@ fn paint(
             }
         }
         drop(tx_output);
+
+        // Skip compositing if there's only one chunk.
+        if num_chunks == 1 {
+            let output = rx_output.recv().expect("missing unique chunk");
+            *rng = output.rng;
+            match splatter_sink {
+                SplatterSink::Immediate => assert!(output.splatter_points.is_empty()),
+                SplatterSink::Deferred(sink) => {
+                    sink.extend_from_slice(output.splatter_points.as_slice());
+                }
+            }
+            colors_used.extend(&output.colors_used);
+            let dt = DrawTarget::from_backing(output.width, output.height, output.data);
+            return dt;
+        }
+
         let mut pctx_final = PaintCtx::new(config, &full_fvp, canvas_width);
         let mut chunks_composited = 0;
         let mut expected_splatter_points = None;

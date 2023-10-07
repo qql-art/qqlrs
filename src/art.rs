@@ -1613,6 +1613,7 @@ pub struct Frame<'a> {
     pub number: Option<u32>,
 }
 pub struct RenderData {
+    pub canvas: DrawTarget,
     pub num_points: usize,
     pub colors_used: HashSet<ColorKey>,
 }
@@ -1677,7 +1678,7 @@ pub fn draw<F: FnMut(Frame)>(
         }
     };
 
-    match batch_sizes {
+    let dt = match batch_sizes {
         None => {
             let dt = paint(
                 canvas_width,
@@ -1698,6 +1699,7 @@ pub fn draw<F: FnMut(Frame)>(
                 number: None,
             });
             eprintln!("drew points");
+            dt
         }
 
         Some(batch_sizes) => {
@@ -1789,10 +1791,12 @@ pub fn draw<F: FnMut(Frame)>(
                 }
                 emit_incremental_frame(&dt);
             }
+            fb
         }
-    }
+    };
 
     RenderData {
+        canvas: dt,
         num_points,
         colors_used,
     }

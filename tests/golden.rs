@@ -24,19 +24,12 @@ fn test_golden(seed: [u8; 32]) -> anyhow::Result<()> {
     let mut config = qql::config::Config::default();
     config.chunks = "2x2".parse().unwrap();
 
-    let mut result: Option<anyhow::Result<()>> = None;
-    let consume_frame = |frame: qql::art::Frame| {
-        assert!(result.is_none(), "Multiple frames rendered");
-        result = Some(
-            if std::env::var_os(ENV_UPDATE_GOLDENS).is_some_and(|v| !v.is_empty()) {
-                write_golden(frame.dt, golden_filepath.as_ref())
-            } else {
-                check_golden(frame.dt, golden_filepath.as_ref())
-            },
-        );
-    };
-    qql::art::draw(&seed, &color_db, &config, GOLDEN_WIDTH, consume_frame);
-    result.expect("No frames rendered")
+    let canvas = qql::art::draw(&seed, &color_db, &config, GOLDEN_WIDTH, |_| {}).canvas;
+    if std::env::var_os(ENV_UPDATE_GOLDENS).is_some_and(|v| !v.is_empty()) {
+        write_golden(&canvas, golden_filepath.as_ref())
+    } else {
+        check_golden(&canvas, golden_filepath.as_ref())
+    }
 }
 
 fn write_golden(dt: &DrawTarget, golden_filepath: &Path) -> anyhow::Result<()> {

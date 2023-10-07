@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use raqote::{DrawOptions, DrawTarget, PathBuilder, SolidSource, Source, StrokeStyle};
 
 use super::color::{ColorDb, ColorKey, ColorSpec};
@@ -9,6 +7,9 @@ use super::math::{angle, cos, dist, modulo, pi, rescale, sin};
 use super::rand::Rng;
 use super::sectors::{Collider, Sectors};
 use super::traits::*;
+
+mod colors_used;
+pub use colors_used::ColorsUsed;
 
 // Use a constant width and height for all of our calculations to avoid
 // float-precision based differences across different window sizes.
@@ -879,7 +880,7 @@ impl Points {
         bullseye_generator: &mut BullseyeGenerator,
         scale_generator: &mut ScaleGenerator,
         sectors: &mut Sectors,
-        colors_used: &mut HashSet<ColorKey>,
+        colors_used: &mut ColorsUsed,
         rng: &mut Rng,
     ) -> (Points, GroupSizes) {
         fn random_idx(len: usize, rng: &mut Rng) -> usize {
@@ -940,7 +941,7 @@ impl Points {
         scale_generator: &mut ScaleGenerator,
         sectors: &mut Sectors,
         margin_checker: &MarginChecker,
-        colors_used: &mut HashSet<ColorKey>,
+        colors_used: &mut ColorsUsed,
         rng: &mut Rng,
     ) {
         if rng.odds(color_change_odds.line) {
@@ -1031,7 +1032,7 @@ fn pick_next_color(seq: &[ColorKey], current_idx: usize, rng: &mut Rng) -> usize
 fn spec_to_color(
     key: ColorKey,
     spec: &ColorSpec,
-    colors_used: &mut HashSet<ColorKey>,
+    colors_used: &mut ColorsUsed,
     rng: &mut Rng,
 ) -> Hsb {
     colors_used.insert(key);
@@ -1165,7 +1166,7 @@ fn paint(
     splatter_sink: &mut SplatterSink,
     extra_splatter_points: &[Point],
     color_scheme: &ColorScheme,
-    colors_used: &mut HashSet<ColorKey>,
+    colors_used: &mut ColorsUsed,
     rng: &mut Rng,
 ) -> DrawTarget {
     let full_fvp = &config.viewport.as_ref().cloned().unwrap_or_default();
@@ -1198,7 +1199,7 @@ fn paint(
         width: i32,
         height: i32,
         data: Vec<u32>,
-        colors_used: HashSet<ColorKey>,
+        colors_used: ColorsUsed,
         splatter_points: Vec<Point>,
         rng: Rng,
     }
@@ -1237,7 +1238,7 @@ fn paint(
                         Background::Transparent => (),
                         Background::Opaque => pctx.dt.clear(background_color),
                     };
-                    let mut colors_used = HashSet::new();
+                    let mut colors_used = ColorsUsed::new();
                     let mut new_splatter_points = Vec::new();
                     paint_normal_points(
                         &mut pctx,
@@ -1395,7 +1396,7 @@ fn paint_splatter_points(
     color_db: &ColorDb,
     splatter_points: &[Point],
     color_scheme: &ColorScheme,
-    colors_used: &mut HashSet<ColorKey>,
+    colors_used: &mut ColorsUsed,
     rng: &mut Rng,
 ) {
     for p in splatter_points {
@@ -1615,7 +1616,7 @@ pub struct Frame<'a> {
 pub struct RenderData {
     pub canvas: DrawTarget,
     pub num_points: usize,
-    pub colors_used: HashSet<ColorKey>,
+    pub colors_used: ColorsUsed,
 }
 
 pub fn draw<F: FnMut(Frame)>(
@@ -1644,7 +1645,7 @@ pub fn draw<F: FnMut(Frame)>(
     let grouped_flow_lines =
         GroupedFlowLines::build(flow_field, ignore_flow_field, start_points, &mut rng);
     let mut sectors: Sectors = build_sectors(&config);
-    let mut colors_used: HashSet<ColorKey> = HashSet::new();
+    let mut colors_used = ColorsUsed::new();
     let (mut points, group_sizes) = Points::build(
         &traits,
         color_db,
@@ -1848,13 +1849,13 @@ mod test {
             bright_max: 72.0,
             bright_variance: 1.0,
         };
-        let mut colors_used: HashSet<ColorKey> = HashSet::new();
+        let mut colors_used: ColorsUsed = ColorsUsed::new();
         let mut rng = Rng::from_seed(&[]);
 
         let color = spec_to_color(key, &spec, &mut colors_used, &mut rng);
         let expected = Hsb(206.1738113319151, 84.77782201272913, 70.8832072948715);
 
-        assert_eq!(colors_used, HashSet::from([key]));
+        assert_eq!(colors_used.as_slice(), &[key]);
         assert_eq!(color, expected);
     }
 }

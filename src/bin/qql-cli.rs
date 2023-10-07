@@ -108,15 +108,14 @@ fn main() {
     );
 
     println!("num_points: {}", render_data.num_points);
-    let mut color_names: Vec<&str> = render_data
+    let color_names: Vec<&str> = render_data
         .colors_used
         .iter()
-        .map(|&k| {
+        .map(|k| {
             color_db
                 .color(k)
                 .map_or("<invalid color>", |c| c.name.as_str())
         })
         .collect();
-    color_names.sort();
     println!("colors: {:?}", color_names);
 }

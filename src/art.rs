@@ -1192,6 +1192,11 @@ fn paint(
         (x.round() as i32, y.round() as i32)
     };
 
+    let splatter_immediate = match splatter_sink {
+        SplatterSink::Immediate => true,
+        SplatterSink::Deferred(_) => false,
+    };
+
     struct Output {
         left_px: i32,
         top_px: i32,
@@ -1203,101 +1208,101 @@ fn paint(
         splatter_points: Vec<Point>,
         rng: Rng,
     }
-    let splatter_immediate = match splatter_sink {
-        SplatterSink::Immediate => true,
-        SplatterSink::Deferred(_) => false,
+    let process_chunk = |x: u32, y: u32, mut rng: Rng| -> Output {
+        let (left_px, top_px) = chunk_origin(x, y);
+        let (right_px, bottom_px) = chunk_origin(x + 1, y + 1);
+        let (width_px, height_px) = (right_px - left_px, bottom_px - top_px);
+        eprintln!(
+            "painting chunk ({}, {}): {}x{}+{}+{}px",
+            x, y, width_px, height_px, left_px, top_px
+        );
+        let (width_ratio, height_ratio) = (
+            full_fvp.width() / f64::from(canvas_dims.0),
+            full_fvp.height() / f64::from(canvas_dims.1),
+        );
+        let fvp = FractionalViewport::from_whlt(
+            f64::from(width_px) * width_ratio,
+            f64::from(height_px) * height_ratio,
+            f64::from(left_px) * width_ratio + full_fvp.left(),
+            f64::from(top_px) * height_ratio + full_fvp.top(),
+        );
+        let mut pctx = PaintCtx::new(config, &fvp, canvas_width);
+        match background {
+            Background::Transparent => (),
+            Background::Opaque => pctx.dt.clear(background_color),
+        };
+        let mut colors_used = ColorsUsed::new();
+        let mut new_splatter_points = Vec::new();
+        paint_normal_points(
+            &mut pctx,
+            traits,
+            normal_points,
+            stack_offset,
+            color_scheme,
+            &mut new_splatter_points,
+            &mut rng,
+        );
+        if splatter_immediate {
+            paint_splatter_points(
+                &mut pctx,
+                color_db,
+                new_splatter_points.as_slice(),
+                color_scheme,
+                &mut colors_used,
+                &mut rng,
+            );
+            new_splatter_points.clear();
+        }
+        paint_splatter_points(
+            &mut pctx,
+            color_db,
+            extra_splatter_points,
+            color_scheme,
+            &mut colors_used,
+            &mut rng,
+        );
+        Output {
+            left_px,
+            top_px,
+            width: pctx.dt.width(),
+            height: pctx.dt.height(),
+            data: pctx.dt.into_inner(),
+            colors_used,
+            splatter_points: new_splatter_points,
+            rng,
+        }
     };
-    let (tx_output, rx_output) = std::sync::mpsc::sync_channel::<Output>(num_chunks);
+    let mut process_splatters = |new_splatters: &[Point]| match splatter_sink {
+        SplatterSink::Immediate => assert!(new_splatters.is_empty()),
+        SplatterSink::Deferred(sink) => {
+            sink.extend_from_slice(new_splatters);
+        }
+    };
 
-    // Render each chunk in its own thread, compositing as we go on the main thread.
+    // Skip compositing if there's only one chunk.
+    if num_chunks == 1 {
+        let output = process_chunk(0, 0, rng.clone());
+        *rng = output.rng;
+        process_splatters(&output.splatter_points);
+        colors_used.extend(&output.colors_used);
+        let dt = DrawTarget::from_backing(output.width, output.height, output.data);
+        return dt;
+    }
+
+    // Otherwise, render each chunk in its own thread, compositing as we go on the main thread.
+    let (tx_output, rx_output) = std::sync::mpsc::sync_channel::<Output>(num_chunks);
     std::thread::scope(|s| {
         for x in 0..hsteps {
             for y in 0..vsteps {
-                let mut rng = rng.clone();
+                let rng = rng.clone();
                 let tx_output = tx_output.clone();
                 s.spawn(move || {
-                    let (left_px, top_px) = chunk_origin(x, y);
-                    let (right_px, bottom_px) = chunk_origin(x + 1, y + 1);
-                    let (width_px, height_px) = (right_px - left_px, bottom_px - top_px);
-                    eprintln!(
-                        "painting chunk ({}, {}): {}x{}+{}+{}px",
-                        x, y, width_px, height_px, left_px, top_px
-                    );
-                    let (width_ratio, height_ratio) = (
-                        full_fvp.width() / f64::from(canvas_dims.0),
-                        full_fvp.height() / f64::from(canvas_dims.1),
-                    );
-                    let fvp = FractionalViewport::from_whlt(
-                        f64::from(width_px) * width_ratio,
-                        f64::from(height_px) * height_ratio,
-                        f64::from(left_px) * width_ratio + full_fvp.left(),
-                        f64::from(top_px) * height_ratio + full_fvp.top(),
-                    );
-                    let mut pctx = PaintCtx::new(config, &fvp, canvas_width);
-                    match background {
-                        Background::Transparent => (),
-                        Background::Opaque => pctx.dt.clear(background_color),
-                    };
-                    let mut colors_used = ColorsUsed::new();
-                    let mut new_splatter_points = Vec::new();
-                    paint_normal_points(
-                        &mut pctx,
-                        traits,
-                        normal_points,
-                        stack_offset,
-                        color_scheme,
-                        &mut new_splatter_points,
-                        &mut rng,
-                    );
-                    if splatter_immediate {
-                        paint_splatter_points(
-                            &mut pctx,
-                            color_db,
-                            new_splatter_points.as_slice(),
-                            color_scheme,
-                            &mut colors_used,
-                            &mut rng,
-                        );
-                        new_splatter_points.clear();
-                    }
-                    paint_splatter_points(
-                        &mut pctx,
-                        color_db,
-                        extra_splatter_points,
-                        color_scheme,
-                        &mut colors_used,
-                        &mut rng,
-                    );
-                    let output = Output {
-                        left_px,
-                        top_px,
-                        width: pctx.dt.width(),
-                        height: pctx.dt.height(),
-                        data: pctx.dt.into_inner(),
-                        colors_used,
-                        splatter_points: new_splatter_points,
-                        rng,
-                    };
+                    let output = process_chunk(x, y, rng);
                     tx_output.send(output).unwrap();
                 });
             }
         }
         drop(tx_output);
-
-        // Skip compositing if there's only one chunk.
-        if num_chunks == 1 {
-            let output = rx_output.recv().expect("missing unique chunk");
-            *rng = output.rng;
-            match splatter_sink {
-                SplatterSink::Immediate => assert!(output.splatter_points.is_empty()),
-                SplatterSink::Deferred(sink) => {
-                    sink.extend_from_slice(output.splatter_points.as_slice());
-                }
-            }
-            colors_used.extend(&output.colors_used);
-            let dt = DrawTarget::from_backing(output.width, output.height, output.data);
-            return dt;
-        }
 
         let mut pctx_final = PaintCtx::new(config, &full_fvp, canvas_width);
         let mut chunks_composited = 0;
@@ -1305,12 +1310,7 @@ fn paint(
         while let Ok(output) = rx_output.recv() {
             if chunks_composited == 0 {
                 *rng = output.rng;
-                match splatter_sink {
-                    SplatterSink::Immediate => assert!(output.splatter_points.is_empty()),
-                    SplatterSink::Deferred(sink) => {
-                        sink.extend_from_slice(output.splatter_points.as_slice());
-                    }
-                }
+                process_splatters(&output.splatter_points);
                 expected_splatter_points = Some(output.splatter_points);
             } else {
                 if output.rng != *rng {

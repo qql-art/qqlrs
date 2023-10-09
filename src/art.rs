@@ -1155,6 +1155,7 @@ enum SplatterSink<'a> {
     Deferred(&'a mut Vec<Point>),
 }
 
+#[allow(clippy::too_many_arguments)]
 fn paint(
     canvas_width: i32,
     background: Background,
@@ -1184,7 +1185,7 @@ fn paint(
     let vsteps: u32 = config.chunks.h.into();
     let num_chunks: usize = (hsteps * vsteps).try_into().expect("too many chunks!");
 
-    let canvas_dims = canvas_dimensions(&full_fvp, canvas_width);
+    let canvas_dims = canvas_dimensions(full_fvp, canvas_width);
     let chunk_origin = |chunk_x: u32, chunk_y: u32| -> (i32, i32) {
         let (w, h) = canvas_dims;
         let x = f64::from(w) * (f64::from(chunk_x) / f64::from(hsteps));
@@ -1304,7 +1305,7 @@ fn paint(
         }
         drop(tx_output);
 
-        let mut pctx_final = PaintCtx::new(config, &full_fvp, canvas_width);
+        let mut pctx_final = PaintCtx::new(config, full_fvp, canvas_width);
         let mut chunks_composited = 0;
         let mut expected_splatter_points = None;
         while let Ok(output) = rx_output.recv() {
@@ -1382,7 +1383,7 @@ fn paint_normal_points(
             );
         }
         if is_zebra {
-            draw_ring_dot(&p, pctx, rng);
+            draw_ring_dot(p, pctx, rng);
         } else {
             let mut p = p.clone();
             p.secondary_color = p.primary_color;
@@ -1644,7 +1645,7 @@ pub fn draw<F: FnMut(Frame)>(
 
     let grouped_flow_lines =
         GroupedFlowLines::build(flow_field, ignore_flow_field, start_points, &mut rng);
-    let mut sectors: Sectors = build_sectors(&config);
+    let mut sectors: Sectors = build_sectors(config);
     let mut colors_used = ColorsUsed::new();
     let (mut points, group_sizes) = Points::build(
         &traits,
@@ -1662,7 +1663,7 @@ pub fn draw<F: FnMut(Frame)>(
     eprintln!("laid out points");
     let num_points = points.0.len();
 
-    let () = adjust_draw_radius(&config, points.0.as_mut_slice());
+    let () = adjust_draw_radius(config, points.0.as_mut_slice());
     let stack_offset = StackOffset::build(&traits, &mut rng);
 
     let batch_sizes = match config.animate {
@@ -1686,7 +1687,7 @@ pub fn draw<F: FnMut(Frame)>(
                 Background::Opaque,
                 &traits,
                 color_db,
-                &config,
+                config,
                 &stack_offset,
                 points.0.as_slice(),
                 &mut SplatterSink::Immediate,
@@ -1711,7 +1712,7 @@ pub fn draw<F: FnMut(Frame)>(
                 Background::Opaque,
                 &traits,
                 color_db,
-                &config,
+                config,
                 &stack_offset,
                 &[], // no normal points (background only)
                 &mut SplatterSink::Deferred(&mut splatter_points),
@@ -1758,7 +1759,7 @@ pub fn draw<F: FnMut(Frame)>(
                     Background::Transparent,
                     &traits,
                     color_db,
-                    &config,
+                    config,
                     &stack_offset,
                     batch,
                     &mut SplatterSink::Deferred(&mut splatter_points),
@@ -1778,7 +1779,7 @@ pub fn draw<F: FnMut(Frame)>(
                     Background::Transparent,
                     &traits,
                     color_db,
-                    &config,
+                    config,
                     &stack_offset,
                     &[], // no normal points
                     &mut SplatterSink::Deferred(&mut splatter_sentinel),

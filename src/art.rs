@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use raqote::{DrawOptions, DrawTarget, PathBuilder, SolidSource, Source, StrokeStyle};
 
 use super::color::{ColorDb, ColorKey, ColorSpec};
@@ -868,6 +870,32 @@ impl Rgb {
     }
 }
 
+impl Point {
+    fn num_drawn_rings(&self) -> RingCount {
+        let natural_rings = self.bullseye.rings;
+        // TODO(wchargin): Simplify under the assumption that `natural_rings` starts as 1, 2, 3, or 7.
+        if self.scale < rescale(self.bullseye.density, (0.15, 1.0), (w(0.0039), w(0.001))) {
+            natural_rings.min(1)
+        } else if self.scale < rescale(self.bullseye.density, (0.15, 1.0), (w(0.0072), w(0.0029))) {
+            natural_rings.min(2)
+        } else if self.scale < w(0.01) {
+            natural_rings.min(3)
+        } else if self.scale < w(0.012) {
+            natural_rings.min(4)
+        } else if self.scale < w(0.014) {
+            natural_rings.min(5)
+        } else if self.scale < w(0.017) {
+            natural_rings.min(6)
+        } else if self.scale < w(0.02) {
+            natural_rings.min(7)
+        } else if self.scale < w(0.023) {
+            natural_rings.min(8)
+        } else {
+            natural_rings
+        }
+    }
+}
+
 impl Points {
     #[allow(clippy::too_many_arguments)]
     pub fn build(
@@ -1417,25 +1445,7 @@ fn paint_splatter_points(
 }
 
 fn draw_ring_dot(pt: &Point, pctx: &mut PaintCtx, rng: &mut Rng) {
-    let mut num_rings = pt.bullseye.rings;
-    // TODO(wchargin): Simplify under the assumption that `num_rings` starts as 1, 2, 3, or 7.
-    if pt.scale < rescale(pt.bullseye.density, (0.15, 1.0), (w(0.0039), w(0.001))) {
-        num_rings = num_rings.min(1);
-    } else if pt.scale < rescale(pt.bullseye.density, (0.15, 1.0), (w(0.0072), w(0.0029))) {
-        num_rings = num_rings.min(2);
-    } else if pt.scale < w(0.01) {
-        num_rings = num_rings.min(3);
-    } else if pt.scale < w(0.012) {
-        num_rings = num_rings.min(4);
-    } else if pt.scale < w(0.014) {
-        num_rings = num_rings.min(5);
-    } else if pt.scale < w(0.017) {
-        num_rings = num_rings.min(6);
-    } else if pt.scale < w(0.02) {
-        num_rings = num_rings.min(7);
-    } else if pt.scale < w(0.023) {
-        num_rings = num_rings.min(8);
-    }
+    let num_rings = pt.num_drawn_rings();
     let band_step = pt.scale / num_rings as f64;
 
     // lower fill density results in higher thickness
@@ -1618,6 +1628,7 @@ pub struct RenderData {
     pub canvas: DrawTarget,
     pub num_points: usize,
     pub colors_used: ColorsUsed,
+    pub ring_counts_used: BTreeMap<RingCount, usize>,
 }
 
 pub fn draw<F: FnMut(Frame)>(
@@ -1662,6 +1673,10 @@ pub fn draw<F: FnMut(Frame)>(
     );
     eprintln!("laid out points");
     let num_points = points.0.len();
+    let mut ring_counts_used = BTreeMap::new();
+    for pt in &points.0 {
+        *ring_counts_used.entry(pt.num_drawn_rings()).or_default() += 1;
+    }
 
     let () = adjust_draw_radius(config, points.0.as_mut_slice());
     let stack_offset = StackOffset::build(&traits, &mut rng);
@@ -1801,6 +1816,7 @@ pub fn draw<F: FnMut(Frame)>(
         canvas: dt,
         num_points,
         colors_used,
+        ring_counts_used,
     }
 }
 

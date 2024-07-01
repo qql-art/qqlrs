@@ -118,4 +118,5 @@ fn main() {
         })
         .collect();
     println!("colors: {:?}", color_names);
+    println!("ring counts: {:?}", render_data.ring_counts_used);
 }

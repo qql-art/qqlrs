@@ -1266,6 +1266,16 @@ mod paint_mode {
 }
 use paint_mode::PaintMode;
 
+/// Normal (non-splatter) points to be rendered, if any. If normal points are to be rendered, they
+/// may generate splatter points, and the caller must specify what to do with those.
+enum NormalPoints<'a> {
+    Some {
+        points: &'a [Point],
+        splatter_sink: SplatterSink<'a>,
+    },
+    None,
+}
+
 /// As normal points are painted and generate splatter points, how should they be handled?
 enum SplatterSink<'a> {
     /// Any generated splatter points should be painted immediately after all normal points are
@@ -1278,9 +1288,6 @@ enum SplatterSink<'a> {
     /// their positions and they will not be drawn. This is equivalent to using `Deferred(_)` into
     /// a buffer that is dropped after the render completes.
     Ignored,
-    /// Panic if any splatter points are generated. This should generally only be used if the
-    /// `normal_points` argument to `render` is empty.
-    AssertNone,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1291,8 +1298,7 @@ fn render<PM: PaintMode>(
     color_db: &ColorDb,
     config: &Config,
     stack_offset: &StackOffset,
-    normal_points: &[Point],
-    splatter_sink: &mut SplatterSink,
+    mut normal_points: NormalPoints<'_>,
     extra_splatter_points: &[Point],
     color_scheme: &ColorScheme,
     colors_used: &mut ColorsUsed,
@@ -1324,11 +1330,13 @@ fn render<PM: PaintMode>(
         (x.round() as i32, y.round() as i32)
     };
 
-    let splatter_immediate = match splatter_sink {
-        SplatterSink::Immediate => true,
-        SplatterSink::AssertNone => false,
-        SplatterSink::Ignored => false,
-        SplatterSink::Deferred(_) => false,
+    // Pull some `Sync` values off `normal_points`, just the bits that worker threads need.
+    let (normal_points_slice, splatter_sink_immediate): (&[Point], bool) = match normal_points {
+        NormalPoints::Some {
+            points,
+            ref splatter_sink,
+        } => (points, matches!(splatter_sink, SplatterSink::Immediate)),
+        NormalPoints::None => (&[], false),
     };
 
     struct Output<PM: PaintMode> {
@@ -1369,13 +1377,13 @@ fn render<PM: PaintMode>(
         paint_normal_points(
             &mut pctx,
             traits,
-            normal_points,
+            normal_points_slice,
             stack_offset,
             color_scheme,
             &mut new_splatter_points,
             &mut rng,
         );
-        if splatter_immediate {
+        if splatter_sink_immediate {
             paint_splatter_points(
                 &mut pctx,
                 color_db,
@@ -1403,15 +1411,15 @@ fn render<PM: PaintMode>(
             rng,
         }
     };
-    let mut process_splatters = |new_splatters: &[Point]| match splatter_sink {
-        SplatterSink::Immediate => {
-            assert!(new_splatters.is_empty(), "invariant violation in render")
-        }
-        SplatterSink::AssertNone => assert!(new_splatters.is_empty(), "unexpected splatter points"),
-        SplatterSink::Ignored => (),
-        SplatterSink::Deferred(sink) => {
-            sink.extend_from_slice(new_splatters);
-        }
+    let mut process_splatters = |new_splatters: &[Point]| match &mut normal_points {
+        NormalPoints::None => (),
+        NormalPoints::Some { splatter_sink, .. } => match splatter_sink {
+            SplatterSink::Immediate => assert!(new_splatters.is_empty()),
+            SplatterSink::Ignored => (),
+            SplatterSink::Deferred(sink) => {
+                sink.extend_from_slice(new_splatters);
+            }
+        },
     };
 
     // Skip compositing if there's only one chunk.
@@ -1815,8 +1823,10 @@ pub fn draw<F: FnMut(Frame)>(
                 color_db,
                 config,
                 &stack_offset,
-                points.0.as_slice(),
-                &mut SplatterSink::Immediate,
+                NormalPoints::Some {
+                    points: points.0.as_slice(),
+                    splatter_sink: SplatterSink::Immediate,
+                },
                 &[], // no extra splatter points
                 &color_scheme,
                 &mut colors_used,
@@ -1833,6 +1843,7 @@ pub fn draw<F: FnMut(Frame)>(
         Some(batch_sizes) => {
             let old_rng = rng.clone();
             let mut splatter_points = Vec::new();
+            // For the first frame, render just the background.
             let mut fb = render::<paint_mode::Paint>(
                 canvas_width,
                 Background::Opaque,
@@ -1840,8 +1851,7 @@ pub fn draw<F: FnMut(Frame)>(
                 color_db,
                 config,
                 &stack_offset,
-                &[], // no normal points (background only)
-                &mut SplatterSink::AssertNone,
+                NormalPoints::None,
                 &[], // no extra splatter points
                 &color_scheme,
                 &mut colors_used,
@@ -1879,8 +1889,10 @@ pub fn draw<F: FnMut(Frame)>(
                     color_db,
                     config,
                     &stack_offset,
-                    points.0.as_slice(),
-                    &mut SplatterSink::Ignored,
+                    NormalPoints::Some {
+                        points: points.0.as_slice(),
+                        splatter_sink: SplatterSink::Ignored,
+                    },
                     &[], // no extra splatter points
                     &color_scheme,
                     &mut ColorsUsed::new(),
@@ -1935,8 +1947,10 @@ pub fn draw<F: FnMut(Frame)>(
                             color_db,
                             config,
                             &stack_offset,
-                            batch,
-                            &mut SplatterSink::Deferred(&mut splatter_points),
+                            NormalPoints::Some {
+                                points: batch,
+                                splatter_sink: SplatterSink::Deferred(&mut splatter_points),
+                            },
                             &[], // no extra splatter points
                             &color_scheme,
                             &mut colors_used,
@@ -1953,8 +1967,10 @@ pub fn draw<F: FnMut(Frame)>(
                             color_db,
                             config,
                             &stack_offset,
-                            batch,
-                            &mut SplatterSink::Deferred(&mut these_splatters),
+                            NormalPoints::Some {
+                                points: batch,
+                                splatter_sink: SplatterSink::Deferred(&mut these_splatters),
+                            },
                             &[], // no extra splatter points
                             &color_scheme,
                             &mut colors_used,
@@ -1967,8 +1983,7 @@ pub fn draw<F: FnMut(Frame)>(
                             color_db,
                             config,
                             &stack_offset,
-                            &[], // no normal points
-                            &mut SplatterSink::AssertNone,
+                            NormalPoints::None,
                             &these_splatters,
                             &color_scheme,
                             &mut splatters.colors_used,
@@ -1989,8 +2004,7 @@ pub fn draw<F: FnMut(Frame)>(
                     color_db,
                     config,
                     &stack_offset,
-                    &[], // no normal points
-                    &mut SplatterSink::AssertNone,
+                    NormalPoints::None,
                     splatter_points.as_slice(),
                     &color_scheme,
                     &mut colors_used,

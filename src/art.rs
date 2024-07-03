@@ -1107,8 +1107,8 @@ impl StackOffset {
     }
 }
 
-struct PaintCtx {
-    dt: DrawTarget,
+struct PaintCtx<PM: PaintMode> {
+    maybe_draw_target: PM::DrawTarget,
     min_circle_steps: f64,
     viewport: VirtualViewport,
     /// Ratio mapping from "virtual space" (used for layout) to "raster space" (actual pixels on
@@ -1147,7 +1147,7 @@ fn canvas_dimensions(fvp: &FractionalViewport, full_width: i32) -> (i32, i32) {
     (w, h)
 }
 
-impl PaintCtx {
+impl<PM: PaintMode> PaintCtx<PM> {
     /// Assembles a new paint context.
     ///
     /// The given `FractionalViewport` overrides any viewport set in the `Config`.
@@ -1155,17 +1155,21 @@ impl PaintCtx {
         let virtual_vp = VirtualViewport::from(fvp);
 
         let (w, h) = canvas_dimensions(fvp, canvas_width);
-        let dt = DrawTarget::new(w, h);
+        let dt = PM::new_draw_target(w, h);
 
         let min_circle_steps = f64::max(8.0, config.min_circle_steps.unwrap_or(0) as f64);
         let scale_ratio = (canvas_width as f64 / VIRTUAL_W) as f32;
 
         Self {
-            dt,
+            maybe_draw_target: dt,
             min_circle_steps,
             viewport: virtual_vp,
             scale_ratio,
         }
+    }
+
+    fn draw_target(&mut self) -> Option<&mut DrawTarget> {
+        PM::as_draw_target(&mut self.maybe_draw_target)
     }
 }
 
@@ -1174,6 +1178,92 @@ enum Background {
     Transparent,
     Opaque,
 }
+
+mod paint_mode {
+    use raqote::{DrawOptions, DrawTarget};
+
+    pub trait PaintMode {
+        type DrawTarget;
+        type Components: Send;
+
+        fn new_draw_target(width: i32, height: i32) -> Self::DrawTarget;
+        fn as_draw_target(data: &mut Self::DrawTarget) -> Option<&mut DrawTarget>;
+
+        fn decompose(dt: Self::DrawTarget) -> Self::Components;
+        fn compose(dt: Self::Components) -> Self::DrawTarget;
+        fn draw_onto(dt: &mut Self::DrawTarget, components: &Self::Components, x: i32, y: i32);
+
+        fn respect_chunks() -> bool;
+    }
+
+    /// Actually paint objects. This is the usual mode of operation.
+    #[derive(Debug, Copy, Clone)]
+    pub struct Paint;
+
+    /// Do not paint. Used for advancing the RNG state.
+    #[derive(Debug, Copy, Clone)]
+    pub struct Skip;
+
+    pub struct Components {
+        width: i32,
+        height: i32,
+        data: Vec<u32>,
+    }
+
+    impl PaintMode for Paint {
+        type DrawTarget = DrawTarget;
+        type Components = Components;
+
+        fn new_draw_target(width: i32, height: i32) -> Self::DrawTarget {
+            DrawTarget::new(width, height)
+        }
+        fn as_draw_target(data: &mut DrawTarget) -> Option<&mut DrawTarget> {
+            Some(data)
+        }
+
+        fn decompose(dt: Self::DrawTarget) -> Self::Components {
+            Components {
+                width: dt.width(),
+                height: dt.height(),
+                data: dt.into_inner(),
+            }
+        }
+        fn compose(components: Self::Components) -> Self::DrawTarget {
+            DrawTarget::from_backing(components.width, components.height, components.data)
+        }
+        fn draw_onto(dt: &mut Self::DrawTarget, components: &Self::Components, x: i32, y: i32) {
+            let img = raqote::Image {
+                width: components.width,
+                height: components.height,
+                data: &components.data,
+            };
+            dt.draw_image_at(x as f32, y as f32, &img, &DrawOptions::new());
+        }
+
+        fn respect_chunks() -> bool {
+            true
+        }
+    }
+
+    impl PaintMode for Skip {
+        type DrawTarget = ();
+        type Components = ();
+
+        fn new_draw_target(_width: i32, _height: i32) -> Self::DrawTarget {}
+        fn as_draw_target(_data: &mut ()) -> Option<&mut DrawTarget> {
+            None
+        }
+
+        fn decompose(_dt: Self::DrawTarget) -> Self::Components {}
+        fn compose(_components: Self::Components) -> Self::DrawTarget {}
+        fn draw_onto(_dt: &mut Self::DrawTarget, _components: &Self::Components, _: i32, _: i32) {}
+
+        fn respect_chunks() -> bool {
+            false
+        }
+    }
+}
+use paint_mode::PaintMode;
 
 /// As normal points are painted and generate splatter points, should they be painted immediately
 /// (for a one-shot render) or pushed into a queue to be rendered later (for incremental
@@ -1184,7 +1274,7 @@ enum SplatterSink<'a> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn paint(
+fn render<PM: PaintMode>(
     canvas_width: i32,
     background: Background,
     traits: &Traits,
@@ -1197,7 +1287,7 @@ fn paint(
     color_scheme: &ColorScheme,
     colors_used: &mut ColorsUsed,
     rng: &mut Rng,
-) -> DrawTarget {
+) -> PM::DrawTarget {
     let full_fvp = &config.viewport.as_ref().cloned().unwrap_or_default();
 
     let background_color = {
@@ -1209,8 +1299,11 @@ fn paint(
             .to_solid_source()
     };
 
-    let hsteps: u32 = config.chunks.w.into();
-    let vsteps: u32 = config.chunks.h.into();
+    let (hsteps, vsteps): (u32, u32) = if PM::respect_chunks() {
+        (config.chunks.w.into(), config.chunks.h.into())
+    } else {
+        (1, 1)
+    };
     let num_chunks: usize = (hsteps * vsteps).try_into().expect("too many chunks!");
 
     let canvas_dims = canvas_dimensions(full_fvp, canvas_width);
@@ -1226,18 +1319,16 @@ fn paint(
         SplatterSink::Deferred(_) => false,
     };
 
-    struct Output {
+    struct Output<PM: PaintMode> {
         left_px: i32,
         top_px: i32,
         // `DrawTarget` is `!Send`, so we break it down into its components.
-        width: i32,
-        height: i32,
-        data: Vec<u32>,
+        dt_components: PM::Components,
         colors_used: ColorsUsed,
         splatter_points: Vec<Point>,
         rng: Rng,
     }
-    let process_chunk = |x: u32, y: u32, mut rng: Rng| -> Output {
+    let process_chunk = |x: u32, y: u32, mut rng: Rng| -> Output<PM> {
         let (left_px, top_px) = chunk_origin(x, y);
         let (right_px, bottom_px) = chunk_origin(x + 1, y + 1);
         let (width_px, height_px) = (right_px - left_px, bottom_px - top_px);
@@ -1255,10 +1346,11 @@ fn paint(
             f64::from(left_px) * width_ratio + full_fvp.left(),
             f64::from(top_px) * height_ratio + full_fvp.top(),
         );
-        let mut pctx = PaintCtx::new(config, &fvp, canvas_width);
-        match background {
-            Background::Transparent => (),
-            Background::Opaque => pctx.dt.clear(background_color),
+        let mut pctx = PaintCtx::<PM>::new(config, &fvp, canvas_width);
+        match (background, pctx.draw_target()) {
+            (Background::Transparent, _) => (),
+            (Background::Opaque, None) => (),
+            (Background::Opaque, Some(dt)) => dt.clear(background_color),
         };
         let mut colors_used = ColorsUsed::new();
         let mut new_splatter_points = Vec::new();
@@ -1293,9 +1385,7 @@ fn paint(
         Output {
             left_px,
             top_px,
-            width: pctx.dt.width(),
-            height: pctx.dt.height(),
-            data: pctx.dt.into_inner(),
+            dt_components: PM::decompose(pctx.maybe_draw_target),
             colors_used,
             splatter_points: new_splatter_points,
             rng,
@@ -1314,12 +1404,11 @@ fn paint(
         *rng = output.rng;
         process_splatters(&output.splatter_points);
         colors_used.extend(&output.colors_used);
-        let dt = DrawTarget::from_backing(output.width, output.height, output.data);
-        return dt;
+        return PM::compose(output.dt_components);
     }
 
     // Otherwise, render each chunk in its own thread, compositing as we go on the main thread.
-    let (tx_output, rx_output) = std::sync::mpsc::sync_channel::<Output>(num_chunks);
+    let (tx_output, rx_output) = std::sync::mpsc::sync_channel::<Output<PM>>(num_chunks);
     std::thread::scope(|s| {
         for x in 0..hsteps {
             for y in 0..vsteps {
@@ -1333,7 +1422,7 @@ fn paint(
         }
         drop(tx_output);
 
-        let mut pctx_final = PaintCtx::new(config, full_fvp, canvas_width);
+        let mut pctx_final = PaintCtx::<PM>::new(config, full_fvp, canvas_width);
         let mut chunks_composited = 0;
         let mut expected_splatter_points = None;
         while let Ok(output) = rx_output.recv() {
@@ -1351,27 +1440,22 @@ fn paint(
                     panic!("new splatter points mismatch");
                 }
             }
-            let img = raqote::Image {
-                width: output.width,
-                height: output.height,
-                data: output.data.as_slice(),
-            };
-            pctx_final.dt.draw_image_at(
-                output.left_px as f32,
-                output.top_px as f32,
-                &img,
-                &DrawOptions::new(),
+            PM::draw_onto(
+                &mut pctx_final.maybe_draw_target,
+                &output.dt_components,
+                output.left_px,
+                output.top_px,
             );
             colors_used.extend(&output.colors_used);
             chunks_composited += 1;
         }
         assert_eq!(chunks_composited, num_chunks, "missing some chunks");
-        pctx_final.dt
+        pctx_final.maybe_draw_target
     })
 }
 
-fn paint_normal_points(
-    pctx: &mut PaintCtx,
+fn paint_normal_points<PM: PaintMode>(
+    pctx: &mut PaintCtx<PM>,
     traits: &Traits,
     points: &[Point],
     stack_offset: &StackOffset,
@@ -1420,8 +1504,8 @@ fn paint_normal_points(
     }
 }
 
-fn paint_splatter_points(
-    pctx: &mut PaintCtx,
+fn paint_splatter_points<PM: PaintMode>(
+    pctx: &mut PaintCtx<PM>,
     color_db: &ColorDb,
     splatter_points: &[Point],
     color_scheme: &ColorScheme,
@@ -1444,7 +1528,7 @@ fn paint_splatter_points(
     }
 }
 
-fn draw_ring_dot(pt: &Point, pctx: &mut PaintCtx, rng: &mut Rng) {
+fn draw_ring_dot<PM: PaintMode>(pt: &Point, pctx: &mut PaintCtx<PM>, rng: &mut Rng) {
     let num_rings = pt.num_drawn_rings();
     let band_step = pt.scale / num_rings as f64;
 
@@ -1500,13 +1584,13 @@ fn draw_ring_dot(pt: &Point, pctx: &mut PaintCtx, rng: &mut Rng) {
     }
 }
 
-fn draw_messy_circle(
+fn draw_messy_circle<PM: PaintMode>(
     (x, y): (f64, f64),
     r: f64,
     thickness: f64,
     variance_adjust: f64,
     color: Hsb,
-    pctx: &mut PaintCtx,
+    pctx: &mut PaintCtx<PM>,
     rng: &mut Rng,
 ) {
     let source = color.to_rgb().to_source();
@@ -1557,17 +1641,15 @@ fn draw_messy_circle(
     }
 }
 
-fn draw_clean_circle(
+fn draw_clean_circle<PM: PaintMode>(
     (x, y): (f64, f64),
     r: f64,
     thickness: f64,
     eccentricity: f64,
     source: &Source,
-    pctx: &mut PaintCtx,
+    pctx: &mut PaintCtx<PM>,
     rng: &mut Rng,
 ) {
-    let dt = &mut pctx.dt;
-
     let r = (r - thickness * 0.5).max(w(0.0002));
     let stroke_weight = thickness * 0.95;
 
@@ -1579,45 +1661,47 @@ fn draw_clean_circle(
     // We don't need to compute that, but we need to burn a uniform deviate to keep RNG synced.
     rng.rnd();
 
-    if x + (rx + stroke_weight / 2.0) < pctx.viewport.left
-        || x - (rx + stroke_weight / 2.0) > pctx.viewport.right
-        || y + (ry + stroke_weight / 2.0) < pctx.viewport.top
-        || y - (ry + stroke_weight / 2.0) > pctx.viewport.bottom
-    {
-        // Circle is entirely outside viewport; skip painting it. There are no more stateful RNG
-        // calls past this point, so we can bail entirely, skipping `dt.stroke` (vast majority of
-        // time spent) and also the trigonometric functions (not nearly as expensive but do show up
-        // on the profile).
-        return;
-    }
-
-    let num_steps = (r * pi(2.0) / w(0.0005)).max(pctx.min_circle_steps);
-    let step = pi(2.0) / num_steps;
-
-    let mut pb = PathBuilder::new();
-    let mut theta = 0.0;
-    while theta < pi(2.0) {
-        let x = (x - pctx.viewport.left + rx * theta.cos()) as f32 * pctx.scale_ratio;
-        let y = (y - pctx.viewport.top + ry * theta.sin()) as f32 * pctx.scale_ratio;
-        if theta == 0.0 {
-            pb.move_to(x, y);
-        } else {
-            pb.line_to(x, y);
+    if let Some(dt) = PM::as_draw_target(&mut pctx.maybe_draw_target) {
+        if x + (rx + stroke_weight / 2.0) < pctx.viewport.left
+            || x - (rx + stroke_weight / 2.0) > pctx.viewport.right
+            || y + (ry + stroke_weight / 2.0) < pctx.viewport.top
+            || y - (ry + stroke_weight / 2.0) > pctx.viewport.bottom
+        {
+            // Circle is entirely outside viewport; skip painting it. There are no more stateful RNG
+            // calls past this point, so we can bail entirely, skipping `dt.stroke` (vast majority of
+            // time spent) and also the trigonometric functions (not nearly as expensive but do show up
+            // on the profile).
+            return;
         }
-        theta += step;
-    }
-    pb.close();
-    let path = pb.finish();
 
-    dt.stroke(
-        &path,
-        source,
-        &StrokeStyle {
-            width: stroke_weight as f32 * pctx.scale_ratio,
-            ..StrokeStyle::default()
-        },
-        &DrawOptions::new(),
-    );
+        let num_steps = (r * pi(2.0) / w(0.0005)).max(pctx.min_circle_steps);
+        let step = pi(2.0) / num_steps;
+
+        let mut pb = PathBuilder::new();
+        let mut theta = 0.0;
+        while theta < pi(2.0) {
+            let x = (x - pctx.viewport.left + rx * theta.cos()) as f32 * pctx.scale_ratio;
+            let y = (y - pctx.viewport.top + ry * theta.sin()) as f32 * pctx.scale_ratio;
+            if theta == 0.0 {
+                pb.move_to(x, y);
+            } else {
+                pb.line_to(x, y);
+            }
+            theta += step;
+        }
+        pb.close();
+        let path = pb.finish();
+
+        dt.stroke(
+            &path,
+            source,
+            &StrokeStyle {
+                width: stroke_weight as f32 * pctx.scale_ratio,
+                ..StrokeStyle::default()
+            },
+            &DrawOptions::new(),
+        );
+    }
 }
 
 pub struct Frame<'a> {
@@ -1697,7 +1781,7 @@ pub fn draw<F: FnMut(Frame)>(
 
     let dt = match batch_sizes {
         None => {
-            let dt = paint(
+            let dt = render::<paint_mode::Paint>(
                 canvas_width,
                 Background::Opaque,
                 &traits,
@@ -1722,7 +1806,7 @@ pub fn draw<F: FnMut(Frame)>(
         Some(batch_sizes) => {
             let old_rng = rng.clone();
             let mut splatter_points = Vec::new();
-            let mut fb = paint(
+            let mut fb = render::<paint_mode::Paint>(
                 canvas_width,
                 Background::Opaque,
                 &traits,
@@ -1771,7 +1855,7 @@ pub fn draw<F: FnMut(Frame)>(
             let mut points = points.0.as_slice();
             for size in batch_sizes {
                 let (batch, rest) = points.split_at(size);
-                let dt = paint(
+                let dt = render::<paint_mode::Paint>(
                     canvas_width,
                     Background::Transparent,
                     &traits,
@@ -1791,7 +1875,7 @@ pub fn draw<F: FnMut(Frame)>(
 
             if !splatter_points.is_empty() {
                 let mut splatter_sentinel = Vec::new();
-                let dt = paint(
+                let dt = render::<paint_mode::Paint>(
                     canvas_width,
                     Background::Transparent,
                     &traits,

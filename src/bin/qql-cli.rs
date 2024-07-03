@@ -5,6 +5,8 @@ use std::str::FromStr;
 
 use clap::Parser;
 
+use qql::config::Animation;
+
 #[derive(Parser)]
 struct Opts {
     seed: Seed,
@@ -58,6 +60,11 @@ impl Display for Seed {
 fn main() {
     let opts = Opts::parse();
     let color_db = qql::color::ColorDb::from_bundle();
+
+    if let (Animation::None, true) = (&opts.config.animate, opts.config.splatter_immediately) {
+        eprintln!("fatal: --splatter-immediately does not apply unless --animate is also set");
+        std::process::exit(1);
+    };
 
     let base_filepath = if let Some(f) = opts.output_filename {
         f

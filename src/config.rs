@@ -41,8 +41,12 @@ pub struct Config {
     #[clap(long, default_value_t)]
     pub animate: Animation,
 
-    /// For animations, whether to paint splatters immediately as the animation progresses rather
-    /// than deferring them all to the end. This incurs additional processing and may take longer.
+    /// Animate in splatter points immediately after their parents.
+    ///
+    /// By default, all splatters are deferred to the end of the animation. With this option,
+    /// each splatter point is instead drawn immediately after the point that spawned it. This
+    /// takes additional processing and may increase render time. Can only be used if `--animate`
+    /// is also set.
     #[clap(long, default_value_t)]
     pub splatter_immediately: bool,
 }

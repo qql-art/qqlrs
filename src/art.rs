@@ -1739,6 +1739,8 @@ pub fn draw<F: FnMut(Frame)>(
             if old_rng != rng {
                 panic!("painting background changed rng");
             }
+            // https://github.com/rust-lang/rust-clippy/issues/11650
+            #[allow(clippy::drop_non_drop)]
             drop(old_rng);
             if !splatter_points.is_empty() {
                 panic!("painting background produced splatter points");

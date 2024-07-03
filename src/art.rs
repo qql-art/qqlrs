@@ -1180,7 +1180,7 @@ enum Background {
 }
 
 mod paint_mode {
-    use raqote::{DrawOptions, DrawTarget};
+    use raqote::DrawTarget;
 
     pub trait PaintMode {
         type DrawTarget;
@@ -1191,7 +1191,7 @@ mod paint_mode {
 
         fn decompose(dt: Self::DrawTarget) -> Self::Components;
         fn compose(dt: Self::Components) -> Self::DrawTarget;
-        fn draw_onto(dt: &mut Self::DrawTarget, components: &Self::Components, x: i32, y: i32);
+        fn superimpose(dt: &mut Self::DrawTarget, components: &Self::Components, x: i32, y: i32);
 
         fn respect_chunks() -> bool;
     }
@@ -1231,13 +1231,13 @@ mod paint_mode {
         fn compose(components: Self::Components) -> Self::DrawTarget {
             DrawTarget::from_backing(components.width, components.height, components.data)
         }
-        fn draw_onto(dt: &mut Self::DrawTarget, components: &Self::Components, x: i32, y: i32) {
+        fn superimpose(dt: &mut Self::DrawTarget, components: &Self::Components, x: i32, y: i32) {
             let img = raqote::Image {
                 width: components.width,
                 height: components.height,
                 data: &components.data,
             };
-            dt.draw_image_at(x as f32, y as f32, &img, &DrawOptions::new());
+            super::superimpose(dt, img, (x, y))
         }
 
         fn respect_chunks() -> bool {
@@ -1256,7 +1256,8 @@ mod paint_mode {
 
         fn decompose(_dt: Self::DrawTarget) -> Self::Components {}
         fn compose(_components: Self::Components) -> Self::DrawTarget {}
-        fn draw_onto(_dt: &mut Self::DrawTarget, _components: &Self::Components, _: i32, _: i32) {}
+        fn superimpose(_dt: &mut Self::DrawTarget, _components: &Self::Components, _: i32, _: i32) {
+        }
 
         fn respect_chunks() -> bool {
             false
@@ -1265,12 +1266,21 @@ mod paint_mode {
 }
 use paint_mode::PaintMode;
 
-/// As normal points are painted and generate splatter points, should they be painted immediately
-/// (for a one-shot render) or pushed into a queue to be rendered later (for incremental
-/// rendering)?
+/// As normal points are painted and generate splatter points, how should they be handled?
 enum SplatterSink<'a> {
+    /// Any generated splatter points should be painted immediately after all normal points are
+    /// painted. This is the standard QQL behavior for a one-shot render.
     Immediate,
+    /// Any generated splatter points should be pushed into a queue to be rendered later (for
+    /// incremental rendering).
     Deferred(&'a mut Vec<Point>),
+    /// Any generated splatter points should be ignored; entropy will not be consumed to compute
+    /// their positions and they will not be drawn. This is equivalent to using `Deferred(_)` into
+    /// a buffer that is dropped after the render completes.
+    Ignored,
+    /// Panic if any splatter points are generated. This should generally only be used if the
+    /// `normal_points` argument to `render` is empty.
+    AssertNone,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1316,6 +1326,8 @@ fn render<PM: PaintMode>(
 
     let splatter_immediate = match splatter_sink {
         SplatterSink::Immediate => true,
+        SplatterSink::AssertNone => false,
+        SplatterSink::Ignored => false,
         SplatterSink::Deferred(_) => false,
     };
 
@@ -1392,7 +1404,11 @@ fn render<PM: PaintMode>(
         }
     };
     let mut process_splatters = |new_splatters: &[Point]| match splatter_sink {
-        SplatterSink::Immediate => assert!(new_splatters.is_empty()),
+        SplatterSink::Immediate => {
+            assert!(new_splatters.is_empty(), "invariant violation in render")
+        }
+        SplatterSink::AssertNone => assert!(new_splatters.is_empty(), "unexpected splatter points"),
+        SplatterSink::Ignored => (),
         SplatterSink::Deferred(sink) => {
             sink.extend_from_slice(new_splatters);
         }
@@ -1440,7 +1456,7 @@ fn render<PM: PaintMode>(
                     panic!("new splatter points mismatch");
                 }
             }
-            PM::draw_onto(
+            PM::superimpose(
                 &mut pctx_final.maybe_draw_target,
                 &output.dt_components,
                 output.left_px,
@@ -1704,6 +1720,17 @@ fn draw_clean_circle<PM: PaintMode>(
     }
 }
 
+fn as_image(dt: &DrawTarget) -> raqote::Image {
+    raqote::Image {
+        width: dt.width(),
+        height: dt.height(),
+        data: dt.get_data(),
+    }
+}
+fn superimpose(onto: &mut DrawTarget, layer: raqote::Image, (x, y): (i32, i32)) {
+    onto.draw_image_at(x as f32, y as f32, &layer, &DrawOptions::new());
+}
+
 pub struct Frame<'a> {
     pub dt: &'a DrawTarget,
     pub number: Option<u32>,
@@ -1814,7 +1841,7 @@ pub fn draw<F: FnMut(Frame)>(
                 config,
                 &stack_offset,
                 &[], // no normal points (background only)
-                &mut SplatterSink::Deferred(&mut splatter_points),
+                &mut SplatterSink::AssertNone,
                 &[], // no extra splatter points
                 &color_scheme,
                 &mut colors_used,
@@ -1826,9 +1853,48 @@ pub fn draw<F: FnMut(Frame)>(
             // https://github.com/rust-lang/rust-clippy/issues/11650
             #[allow(clippy::drop_non_drop)]
             drop(old_rng);
-            if !splatter_points.is_empty() {
-                panic!("painting background produced splatter points");
+
+            struct Splatters {
+                /// A transparent-background frame buffer containing all splatter points that have
+                /// been painted so far.
+                layer: DrawTarget,
+                /// A spare canvas that can be used for compositing at each frame emission.
+                output_buf: DrawTarget,
+                /// The RNG state after all normal points and after any splatter points that have
+                /// been painted so far.
+                rng: Rng,
+                /// Colors used by splatters only. Saved separately to preserve iteration order.
+                colors_used: ColorsUsed,
             }
+            let mut splatters: Option<Splatters> = if config.splatter_immediately {
+                let layer = DrawTarget::new(fb.width(), fb.height());
+                let output_buf = DrawTarget::new(fb.width(), fb.height());
+                // Compute output state by pre-rendering all the normal points.
+                eprintln!("pre-rendering normal points to seek for splatter state");
+                let mut rng = rng.clone();
+                render::<paint_mode::Skip>(
+                    canvas_width,
+                    Background::Transparent,
+                    &traits,
+                    color_db,
+                    config,
+                    &stack_offset,
+                    points.0.as_slice(),
+                    &mut SplatterSink::Ignored,
+                    &[], // no extra splatter points
+                    &color_scheme,
+                    &mut ColorsUsed::new(),
+                    &mut rng,
+                );
+                Some(Splatters {
+                    layer,
+                    output_buf,
+                    rng,
+                    colors_used: ColorsUsed::new(),
+                })
+            } else {
+                None
+            };
 
             let mut frame_number = 0;
             consume_frame(Frame {
@@ -1837,44 +1903,85 @@ pub fn draw<F: FnMut(Frame)>(
             });
             frame_number += 1;
 
-            let mut emit_incremental_frame = |dt: &DrawTarget| {
-                let img = raqote::Image {
-                    width: dt.width(),
-                    height: dt.height(),
-                    data: dt.get_data(),
+            let mut emit_incremental_frame =
+                |layer: &DrawTarget, splatters: Option<&mut Splatters>| {
+                    assert_eq!((layer.width(), layer.height()), (fb.width(), fb.height()));
+                    superimpose(&mut fb, as_image(layer), (0, 0));
+                    let buf = match splatters {
+                        None => &mut fb,
+                        Some(splatters) => {
+                            let buf = &mut splatters.output_buf;
+                            buf.get_data_mut().copy_from_slice(fb.get_data());
+                            superimpose(buf, as_image(&splatters.layer), (0, 0));
+                            buf
+                        }
+                    };
+                    consume_frame(Frame {
+                        dt: buf,
+                        number: Some(frame_number),
+                    });
+                    frame_number += 1;
                 };
-                assert_eq!((dt.width(), dt.height()), (fb.width(), fb.height()));
-                fb.draw_image_at(0.0, 0.0, &img, &DrawOptions::new());
-                consume_frame(Frame {
-                    dt: &fb,
-                    number: Some(frame_number),
-                });
-                frame_number += 1;
-            };
 
             let mut points = points.0.as_slice();
             for size in batch_sizes {
                 let (batch, rest) = points.split_at(size);
-                let dt = render::<paint_mode::Paint>(
-                    canvas_width,
-                    Background::Transparent,
-                    &traits,
-                    color_db,
-                    config,
-                    &stack_offset,
-                    batch,
-                    &mut SplatterSink::Deferred(&mut splatter_points),
-                    &[], // no extra splatter points
-                    &color_scheme,
-                    &mut colors_used,
-                    &mut rng,
-                );
-                emit_incremental_frame(&dt);
+                match &mut splatters {
+                    None => {
+                        let dt = render::<paint_mode::Paint>(
+                            canvas_width,
+                            Background::Transparent,
+                            &traits,
+                            color_db,
+                            config,
+                            &stack_offset,
+                            batch,
+                            &mut SplatterSink::Deferred(&mut splatter_points),
+                            &[], // no extra splatter points
+                            &color_scheme,
+                            &mut colors_used,
+                            &mut rng,
+                        );
+                        emit_incremental_frame(&dt, splatters.as_mut());
+                    }
+                    Some(splatters) => {
+                        let mut these_splatters = Vec::new();
+                        let normal_layer = render::<paint_mode::Paint>(
+                            canvas_width,
+                            Background::Transparent,
+                            &traits,
+                            color_db,
+                            config,
+                            &stack_offset,
+                            batch,
+                            &mut SplatterSink::Deferred(&mut these_splatters),
+                            &[], // no extra splatter points
+                            &color_scheme,
+                            &mut colors_used,
+                            &mut rng,
+                        );
+                        let splatter_layer = render::<paint_mode::Paint>(
+                            canvas_width,
+                            Background::Transparent,
+                            &traits,
+                            color_db,
+                            config,
+                            &stack_offset,
+                            &[], // no normal points
+                            &mut SplatterSink::AssertNone,
+                            &these_splatters,
+                            &color_scheme,
+                            &mut splatters.colors_used,
+                            &mut splatters.rng,
+                        );
+                        superimpose(&mut splatters.layer, as_image(&splatter_layer), (0, 0));
+                        emit_incremental_frame(&normal_layer, Some(splatters));
+                    }
+                }
                 points = rest;
             }
 
             if !splatter_points.is_empty() {
-                let mut splatter_sentinel = Vec::new();
                 let dt = render::<paint_mode::Paint>(
                     canvas_width,
                     Background::Transparent,
@@ -1883,16 +1990,13 @@ pub fn draw<F: FnMut(Frame)>(
                     config,
                     &stack_offset,
                     &[], // no normal points
-                    &mut SplatterSink::Deferred(&mut splatter_sentinel),
+                    &mut SplatterSink::AssertNone,
                     splatter_points.as_slice(),
                     &color_scheme,
                     &mut colors_used,
                     &mut rng,
                 );
-                if !splatter_sentinel.is_empty() {
-                    panic!("painting splatter points produced more");
-                }
-                emit_incremental_frame(&dt);
+                emit_incremental_frame(&dt, splatters.as_mut());
             }
             fb
         }

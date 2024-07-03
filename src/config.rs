@@ -40,6 +40,11 @@ pub struct Config {
     /// `points:N` (where `N` is a positive integer) to show paint `N` points at a time.
     #[clap(long, default_value_t)]
     pub animate: Animation,
+
+    /// For animations, whether to paint splatters immediately as the animation progresses rather
+    /// than deferring them all to the end. This incurs additional processing and may take longer.
+    #[clap(long, default_value_t)]
+    pub splatter_immediately: bool,
 }
 
 #[derive(Default, Debug, Clone)]

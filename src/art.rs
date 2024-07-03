@@ -1998,6 +1998,9 @@ pub fn draw<F: FnMut(Frame)>(
                 );
                 emit_incremental_frame(&dt, splatters.as_mut());
             }
+            if let Some(splatters) = &splatters {
+                colors_used.extend(&splatters.colors_used);
+            }
             fb
         }
     };

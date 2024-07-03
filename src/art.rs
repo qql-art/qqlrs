@@ -1842,7 +1842,6 @@ pub fn draw<F: FnMut(Frame)>(
 
         Some(batch_sizes) => {
             let old_rng = rng.clone();
-            let mut splatter_points = Vec::new();
             // For the first frame, render just the background.
             let mut fb = render::<paint_mode::Paint>(
                 canvas_width,
@@ -1864,7 +1863,7 @@ pub fn draw<F: FnMut(Frame)>(
             #[allow(clippy::drop_non_drop)]
             drop(old_rng);
 
-            struct Splatters {
+            struct EagerSplatters {
                 /// A transparent-background frame buffer containing all splatter points that have
                 /// been painted so far.
                 layer: DrawTarget,
@@ -1876,7 +1875,11 @@ pub fn draw<F: FnMut(Frame)>(
                 /// Colors used by splatters only. Saved separately to preserve iteration order.
                 colors_used: ColorsUsed,
             }
-            let mut splatters: Option<Splatters> = if config.splatter_immediately {
+            enum Splatters {
+                Eager(EagerSplatters),
+                Deferred(Vec<Point>),
+            }
+            let mut splatters = if config.splatter_immediately {
                 let layer = DrawTarget::new(fb.width(), fb.height());
                 let output_buf = DrawTarget::new(fb.width(), fb.height());
                 // Compute output state by pre-rendering all the normal points.
@@ -1898,14 +1901,14 @@ pub fn draw<F: FnMut(Frame)>(
                     &mut ColorsUsed::new(),
                     &mut rng,
                 );
-                Some(Splatters {
+                Splatters::Eager(EagerSplatters {
                     layer,
                     output_buf,
                     rng,
                     colors_used: ColorsUsed::new(),
                 })
             } else {
-                None
+                Splatters::Deferred(Vec::new())
             };
 
             let mut frame_number = 0;
@@ -1916,7 +1919,7 @@ pub fn draw<F: FnMut(Frame)>(
             frame_number += 1;
 
             let mut emit_incremental_frame =
-                |layer: &DrawTarget, splatters: Option<&mut Splatters>| {
+                |layer: &DrawTarget, splatters: Option<&mut EagerSplatters>| {
                     assert_eq!((layer.width(), layer.height()), (fb.width(), fb.height()));
                     superimpose(&mut fb, as_image(layer), (0, 0));
                     let buf = match splatters {
@@ -1939,7 +1942,7 @@ pub fn draw<F: FnMut(Frame)>(
             for size in batch_sizes {
                 let (batch, rest) = points.split_at(size);
                 match &mut splatters {
-                    None => {
+                    Splatters::Deferred(splatter_points) => {
                         let dt = render::<paint_mode::Paint>(
                             canvas_width,
                             Background::Transparent,
@@ -1949,16 +1952,16 @@ pub fn draw<F: FnMut(Frame)>(
                             &stack_offset,
                             NormalPoints::Some {
                                 points: batch,
-                                splatter_sink: SplatterSink::Deferred(&mut splatter_points),
+                                splatter_sink: SplatterSink::Deferred(splatter_points),
                             },
                             &[], // no extra splatter points
                             &color_scheme,
                             &mut colors_used,
                             &mut rng,
                         );
-                        emit_incremental_frame(&dt, splatters.as_mut());
+                        emit_incremental_frame(&dt, None);
                     }
-                    Some(splatters) => {
+                    Splatters::Eager(splatters) => {
                         let mut these_splatters = Vec::new();
                         let normal_layer = render::<paint_mode::Paint>(
                             canvas_width,
@@ -1996,24 +1999,26 @@ pub fn draw<F: FnMut(Frame)>(
                 points = rest;
             }
 
-            if !splatter_points.is_empty() {
-                let dt = render::<paint_mode::Paint>(
-                    canvas_width,
-                    Background::Transparent,
-                    &traits,
-                    color_db,
-                    config,
-                    &stack_offset,
-                    NormalPoints::None,
-                    splatter_points.as_slice(),
-                    &color_scheme,
-                    &mut colors_used,
-                    &mut rng,
-                );
-                emit_incremental_frame(&dt, splatters.as_mut());
-            }
-            if let Some(splatters) = &splatters {
-                colors_used.extend(&splatters.colors_used);
+            // Finish processing splatters: either render them all if they were deferred, or
+            // register their colors used now that we've gotten all the normal points' colors.
+            match splatters {
+                Splatters::Eager(splatters) => colors_used.extend(&splatters.colors_used),
+                Splatters::Deferred(splatter_points) => {
+                    let dt = render::<paint_mode::Paint>(
+                        canvas_width,
+                        Background::Transparent,
+                        &traits,
+                        color_db,
+                        config,
+                        &stack_offset,
+                        NormalPoints::None,
+                        splatter_points.as_slice(),
+                        &color_scheme,
+                        &mut colors_used,
+                        &mut rng,
+                    );
+                    emit_incremental_frame(&dt, None);
+                }
             }
             fb
         }
